@@ -40,7 +40,7 @@ jobs:
           restore-keys: vcpkg-
 
       - name: Configure
-        run: cmake --preset release
+        run: cmake --preset release -DMJ_BUILD_TESTS=ON
         env:
           VCPKG_ROOT: C:\vcpkg
 
@@ -65,3 +65,8 @@ jobs:
             native/build/release/MarthJukebox.dll
             native/build/release/MarthJukebox.pdb
           if-no-files-found: error
+
+      # Network client tests: a console exe with an in-process 127.0.0.1 HTTP server. Never
+      # touches a real Harmony. A non-zero exit (any failed check) fails the job.
+      - name: Run net tests
+        run: .\build\release\mj_net_tests.exe
