@@ -165,7 +165,7 @@ namespace mj::config
 	}
 
 	EffectiveEnvironment ResolveEnvironment(const Settings& settings, std::string_view groupId, std::string_view subId,
-		const ProfileBuild* build)
+		const ProfileBuild& build)
 	{
 		EffectiveEnvironment r;
 		if (!subId.empty()) {
@@ -182,7 +182,7 @@ namespace mj::config
 			}
 		}
 		// An environment the builder left out (Error) is not in the Harmony profile: it stays Vanilla.
-		if (build && r.setting && r.setting->mode != Mode::Vanilla && !build->publishedTypes.contains(r.typeName)) {
+		if (r.setting && r.setting->mode != Mode::Vanilla && !build.publishedTypes.contains(r.typeName)) {
 			r.excluded = true;
 		}
 		return r;
@@ -193,7 +193,6 @@ namespace mj::config
 		ProfileBuild out;
 		const Ctx ctx{ &out.problems };
 		json types = json::object();
-		bool anyStreaming = false;
 
 		if (!ValidTypeName(settings.global.harmonyProfileName)) {
 			ctx.Add("", ProblemSeverity::Error, "profile name is invalid; nothing to publish");
@@ -219,7 +218,6 @@ namespace mj::config
 			if (!BuildSelector(id, e, sel, ctx)) {
 				continue;
 			}
-			anyStreaming = anyStreaming || e.allowStreaming;
 			types[id] = std::move(sel);
 			out.publishedTypes.insert(id);
 		}
@@ -234,12 +232,10 @@ namespace mj::config
 		root["types"] = std::move(types);
 		root["normalize"] = true;
 		root["format"] = json::object({ { "rate", 44100 }, { "bits", 16 }, { "channels", 2 } });
-		// Profile-level default source set: Library only unless some environment allows streaming. Every `next`
-		// call still passes `sources` explicitly (it overrides the profile's); with streaming allowed it is
-		// omitted here because an older Harmony cannot parse a list and "all" would include Qobuz.
-		if (!anyStreaming) {
-			root["sources"] = "library";
-		}
+		// Profile-level default source set is ALWAYS Library only (streaming is a per-environment opt-in, see
+		// NEXUS-COMPLIANCE). Every `next` call passes `sources` explicitly from AllowStreaming, which overrides it;
+		// omitting it here would make Harmony default to "all" for every type, including ones that never opted in.
+		root["sources"] = "library";
 		// Text was validated above; 'replace' only guards the odd overlong/surrogate sequence, it never throws.
 		out.json = root.dump(2, ' ', false, json::error_handler_t::replace);
 		return out;

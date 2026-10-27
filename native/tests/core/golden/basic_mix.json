@@ -5,6 +5,7 @@
     "rate": 44100
   },
   "normalize": true,
+  "sources": "library",
   "types": {
     "boss": {
       "playlist": {

@@ -60,19 +60,15 @@ namespace
 		return e;
 	}
 
-	// libraryOnly: no environment allows streaming => profile-level sources "library"; else omitted.
-	void CheckCommon(const json& j, bool libraryOnly)
+	// The profile-level sources is ALWAYS "library" (streaming is a per-call opt-in).
+	void CheckCommon(const json& j)
 	{
 		MJ_CHECK(j.at("normalize") == true);
 		MJ_CHECK(j.at("format") == json::parse(R"({"rate":44100,"bits":16,"channels":2})"));
 		MJ_CHECK(!j.at("format").contains("container"));
 		MJ_CHECK(!j.at("types").contains("default"));  // no generated fallback type
 		MJ_CHECK(j.at("types").size() <= kMaxTypes);
-		if (libraryOnly) {
-			MJ_CHECK(j.contains("sources") && j.at("sources") == "library");
-		} else {
-			MJ_CHECK(!j.contains("sources"));
-		}
+		MJ_CHECK(j.contains("sources") && j.at("sources") == "library");
 	}
 }
 
@@ -99,7 +95,7 @@ MJ_TEST(Profile_GoldenBasicMix)
 	const auto out = BuildHarmonyProfile(s, &p);
 	MJ_CHECK_MSG(p.empty(), ProblemsText(p));
 	const auto j = json::parse(out);
-	CheckCommon(j, false);  // dungeon / boss allow streaming
+	CheckCommon(j);  // dungeon / boss allow streaming, the profile default is still library
 	MJ_CHECK(j["types"].size() == 5);
 	MJ_CHECK(!j["types"].contains("town"));
 	MJ_CHECK(j["types"]["explore"] == json::parse(R"({"genre":"Ambient"})"));
@@ -121,7 +117,7 @@ MJ_TEST(Profile_GoldenSubEnvironmentsAndOtherMods)
 	const auto out = BuildHarmonyProfile(s, &p);
 	MJ_CHECK_MSG(p.empty(), ProblemsText(p));
 	const auto j = json::parse(out);
-	CheckCommon(j, true);
+	CheckCommon(j);
 	MJ_CHECK(j["types"].contains("explore.tundra") && j["types"].contains("other.WTMUSExplore"));
 	MJ_CHECK(!j["types"].contains("explore.snow"));
 	MJ_CHECK(out.find("SEKRET") == std::string::npos && out.find("harmony:8080") == std::string::npos);
@@ -134,7 +130,7 @@ MJ_TEST(Profile_GoldenSingleEnvironment)
 	s.environments["combat"] = Env(Mode::Genre, "Metal");
 	const auto out = BuildHarmonyProfile(s);
 	const auto j = json::parse(out);
-	CheckCommon(j, true);
+	CheckCommon(j);
 	MJ_CHECK(j["types"].size() == 1);
 	CheckGolden("single.json", out);
 }
@@ -157,7 +153,7 @@ MJ_TEST(Profile_ValidationFailuresAreReportedPerEnvironment)
 	std::vector<ProfileProblem> p;
 	const auto out = BuildHarmonyProfile(s, &p);
 	const auto j = json::parse(out);
-	CheckCommon(j, true);
+	CheckCommon(j);
 
 	auto has = [&](const std::string& env, ProblemSeverity sev) {
 		return std::any_of(p.begin(), p.end(), [&](const ProfileProblem& x) { return x.environment == env && x.severity == sev; });
@@ -217,13 +213,13 @@ MJ_TEST(Profile_LimitOnTypes)
 	MJ_CHECK(std::count_if(p.begin(), p.end(), [](const ProfileProblem& x) { return x.severity == ProblemSeverity::Error; }) == 6);
 }
 
-MJ_TEST(Profile_StreamingOmitsProfileSources)
+MJ_TEST(Profile_SourcesIsAlwaysLibrary)
 {
 	Settings s;
 	s.environments["explore"] = Env(Mode::Genre, "Ambient");
 	MJ_CHECK(json::parse(BuildHarmonyProfile(s)).at("sources") == "library");
-	s.environments["combat"] = Env(Mode::Genre, "Metal", "", "", true);
-	MJ_CHECK(!json::parse(BuildHarmonyProfile(s)).contains("sources"));
+	s.environments["combat"] = Env(Mode::Genre, "Metal", "", "", true);  // one environment opts in to streaming
+	MJ_CHECK(json::parse(BuildHarmonyProfile(s)).at("sources") == "library");  // ...the others must not inherit "all"
 }
 
 MJ_TEST(Profile_ResolveEnvironmentFollowsBuilderErrors)
@@ -238,15 +234,13 @@ MJ_TEST(Profile_ResolveEnvironmentFollowsBuilderErrors)
 	MJ_CHECK(!build.publishedTypes.contains("explore.tundra") && !build.publishedTypes.contains("combat"));
 
 	// The rejected sub-environment stays Vanilla: it does NOT fall back to the group, nor to a missing type.
-	auto r = ResolveEnvironment(s, "explore", "tundra", &build);
+	auto r = ResolveEnvironment(s, "explore", "tundra", build);
 	MJ_CHECK(r.typeName == "explore.tundra" && r.excluded && !r.Active());
-	// Without the build the raw setting looks active (that is why callers must pass the build).
-	MJ_CHECK(ResolveEnvironment(s, "explore", "tundra").Active());
-	r = ResolveEnvironment(s, "explore", "coast", &build);  // inherits the published group
+	r = ResolveEnvironment(s, "explore", "coast", build);  // inherits the published group
 	MJ_CHECK(r.typeName == "explore" && r.Active());
-	r = ResolveEnvironment(s, "combat", "", &build);
+	r = ResolveEnvironment(s, "combat", "", build);
 	MJ_CHECK(!r.Active() && r.excluded);
-	r = ResolveEnvironment(s, "boss", "", &build);
+	r = ResolveEnvironment(s, "boss", "", build);
 	MJ_CHECK(r.Active());
 	// Cross-check: every environment with an Error is inactive; every other non-Vanilla one is active.
 	for (const auto& [id, e] : s.environments) {
@@ -257,7 +251,7 @@ MJ_TEST(Profile_ResolveEnvironmentFollowsBuilderErrors)
 			g = id.substr(0, dot);
 			sub = id.substr(dot + 1);
 		}
-		MJ_CHECK_MSG(ResolveEnvironment(s, g, sub, &build).Active() == !errored, id);
+		MJ_CHECK_MSG(ResolveEnvironment(s, g, sub, build).Active() == !errored, id);
 	}
 }
 
@@ -273,16 +267,17 @@ MJ_TEST(Profile_PathAndResolve)
 	s.environments["explore.snow"] = Env(Mode::Vanilla, "");
 	s.environments["combat"] = Env(Mode::Vanilla, "");
 
-	auto r = ResolveEnvironment(s, "explore", "tundra");
+	const auto b = BuildProfile(s);
+	auto r = ResolveEnvironment(s, "explore", "tundra", b);
 	MJ_CHECK(r.typeName == "explore.tundra" && r.Active() && r.setting->selector == "Folk");
-	r = ResolveEnvironment(s, "explore", "coast");  // no sub entry: inherits the group
+	r = ResolveEnvironment(s, "explore", "coast", b);  // no sub entry: inherits the group
 	MJ_CHECK(r.typeName == "explore" && r.Active() && r.setting->selector == "Ambient");
-	r = ResolveEnvironment(s, "explore", "snow");   // explicit vanilla override
+	r = ResolveEnvironment(s, "explore", "snow", b);   // explicit vanilla override
 	MJ_CHECK(r.typeName == "explore.snow" && !r.Active());
-	r = ResolveEnvironment(s, "explore", "");
+	r = ResolveEnvironment(s, "explore", "", b);
 	MJ_CHECK(r.typeName == "explore" && r.Active());
-	r = ResolveEnvironment(s, "combat", "");
+	r = ResolveEnvironment(s, "combat", "", b);
 	MJ_CHECK(r.typeName == "combat" && !r.Active());
-	r = ResolveEnvironment(s, "boss", "");
+	r = ResolveEnvironment(s, "boss", "", b);
 	MJ_CHECK(r.typeName.empty() && r.setting == nullptr && !r.Active());
 }

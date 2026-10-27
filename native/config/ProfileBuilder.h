@@ -7,8 +7,8 @@
 //   { "types": { "<environment id>": <selector>, ... },     (no generated "default" type)
 //     "normalize": true,
 //     "format": { "rate": 44100, "bits": 16, "channels": 2 },
-//     "sources": "library" }                                  (only when no environment allows streaming)
-// The plugin still passes `sources` per `next` call from allowStreaming (it overrides the profile's).
+//     "sources": "library" }                                  (always; streaming is a per-environment opt-in)
+// The plugin passes `sources` per `next` call from allowStreaming (it overrides the profile's).
 // `format.container` is absent: the transport layer decides wav / flac.
 
 #include "config/Settings.h"
@@ -65,8 +65,8 @@ namespace mj::config
 		// True when the played type should be retargeted at all.
 		[[nodiscard]] bool Active() const { return setting && setting->mode != Mode::Vanilla && !excluded; }
 	};
-	// Pass the ProfileBuild of the profile that was actually published so an environment rejected with an Error
-	// is reported inactive (it must not fall back to a missing Harmony type).
+	// `build` is the ProfileBuild of the profile that was actually published (required): an environment rejected
+	// with an Error is reported inactive (it must not fall back to a missing Harmony type).
 	[[nodiscard]] EffectiveEnvironment ResolveEnvironment(const Settings& settings, std::string_view groupId, std::string_view subId,
-		const ProfileBuild* build = nullptr);
+		const ProfileBuild& build);
 }

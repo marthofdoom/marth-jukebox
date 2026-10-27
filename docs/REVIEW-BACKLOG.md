@@ -15,6 +15,15 @@
 - **SEV-4** merge conflicts with branch `net-client` (reviewer): both branches edit `native/CMakeLists.txt`,
   `native/vcpkg.json` (nlohmann-json line) and `.github/workflows/native.yml` (test step) and define
   `MJ_BUILD_TESTS`. Resolve at integration; keep one `option()` and one vcpkg line.
-- **SEV-5** minor items (reviewer): remaining SEV-5 notes from the 4a5f2c1 review are not itemised in the hand-off
-  message; the coordinator should paste them verbatim here when draining. (Known from authoring: C4996 `getenv`
-  warning in `tests/core/ProfileTests.cpp`; `EnvLabel`/`SafeName` still echo known key names only.)
+- **SEV-5** (reviewer, round 1): minor items were not itemised in the hand-off message; nothing further to paste.
+  (Authoring note: C4996 `getenv` warning in `tests/core/ProfileTests.cpp`.)
+
+## core-settings, raised against 70979f19826ca7a905ec61e310ae141b859e9a84 (Opus 5.5 round-2 review; deferred)
+
+- **SEV-4** (reviewer, verbatim): IsTableEdid over-blocking third-party MUSCombatBoss*/MUSExploreDLC*/DLC2MUS*
+  (prefix rules are plugin-gated in Classify but IsTableEdid ignores the plugin), so the 'Other mods' UI must hide them.
+- **SEV-4** (reviewer, verbatim): .bak rotating at each session's first Save when the PersonalKey line was lost.
+- **SEV-5** (reviewer, verbatim): WriteFileDurable stale GetLastError on a 0-byte write.
+- **SEV-5** (reviewer, verbatim): Ctx::Add logs raw other.<EDID>.
+- **SEV-5** (reviewer, verbatim): leak test not running other.<key> through BuildProfile.
+- **SEV-5** (reviewer, verbatim): comments-only INI flagged unusable and per-line warnings cleared.

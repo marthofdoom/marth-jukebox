@@ -235,7 +235,8 @@ key, section or environment names (only "line N: unknown key ignored"). Comments
 preserved when the plugin rewrites the file.
 
 Protecting the user's file (and key): the temp file is flushed to disk before the replace. The first `Save` of a
-session keeps the previous good file as `MarthJukebox.ini.bak`. If `Load` finds an existing file it cannot use
+session keeps the previous good file as `MarthJukebox.ini.bak` (copies are written through the same flushed
+path as the INI, so they are on disk before the original is replaced). If `Load` finds an existing file it cannot use
 (unreadable, empty, zero-filled, UTF-16, no recognised key) it publishes defaults and returns false; the next
 `Save` first copies the original bytes to `MarthJukebox.ini.unreadable` (`.unreadable.1`, ... never overwriting
 an earlier copy) and refuses to save if that copy fails. A failed replace leaves the original untouched and
@@ -308,17 +309,16 @@ Limits: at most 128 environment sections are kept.
 - There is **no generated `default` type**. The plugin only asks for published types, and an environment that
   failed validation stays Vanilla instead of silently playing another environment's selector. An environment
   literally named `default` is rejected as reserved.
-- Profile-level `sources`: Harmony's schema accepts `"library"`, `"all"` or a list (list = Harmony `game-pools`
-  branch only). The builder emits `"sources": "library"` when no published environment allows streaming, and
-  omits it otherwise (`all` would include Qobuz; a list would break older Harmony). Every `next` call still passes
-  `sources` explicitly from `AllowStreaming`, which overrides the profile's value.
+- Profile-level `sources` is **always `"library"`** (streaming is a per-environment opt-in, NEXUS-COMPLIANCE).
+  Omitting it would make Harmony default to `all` (which includes Qobuz) for every type, including environments
+  that never opted in. Every `next` call passes `sources` explicitly from `AllowStreaming`, which overrides it.
 - Validation (per environment, reported as `ProfileProblem` and logged; **Error** = environment left out,
   **Warning** = published): type name 1-64 of `[A-Za-z0-9_.-]` starting alphanumeric; at most 64 types including
   all environments; text trimmed, 1-200 code points, no control characters, valid UTF-8; Artist/Playlist
   service `local`/`ytmusic` and a valid id. Warnings: YouTube Music selector while streaming is off; a local
   playlist.
 - Returns an empty string when nothing is publishable (all Vanilla, or all invalid): do not PUT then.
-- `BuildProfile()` returns the JSON, the set of published type names and the problems. Pass it to
-  `ResolveEnvironment(settings, group, sub, &build)`: it gives the type name to pass to `next` (sub if it has a
+- `BuildProfile()` returns the JSON, the set of published type names and the problems. Pass it (required) to
+  `ResolveEnvironment(settings, group, sub, build)`: it gives the type name to pass to `next` (sub if it has a
   section, else the group) and `Active()`, which is false for Vanilla AND for an environment the builder left
   out with an Error (it stays Vanilla; it does not fall back to the group).

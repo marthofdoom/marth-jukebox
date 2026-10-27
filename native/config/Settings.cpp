@@ -326,6 +326,28 @@ namespace mj::config
 #endif
 		}
 
+		// Copies `from` to `to` through WriteFileDurable (flushed). noOverwrite: refuses when `to` exists.
+		bool CopyDurable(const std::filesystem::path& from, const std::filesystem::path& to, bool noOverwrite, std::string& err)
+		{
+			std::error_code ec;
+			if (noOverwrite && (std::filesystem::exists(to, ec) || ec)) {
+				err = "the destination copy already exists or could not be checked";
+				return false;
+			}
+			std::ifstream in(from, std::ios::binary);
+			if (!in) {
+				err = "the original could not be opened for copying";
+				return false;
+			}
+			std::ostringstream ss;
+			ss << in.rdbuf();
+			if (in.bad()) {
+				err = "the original could not be read for copying";
+				return false;
+			}
+			return WriteFileDurable(to, ss.str(), err);
+		}
+
 		bool ReplaceFile(const std::filesystem::path& from, const std::filesystem::path& to, std::string& err)
 		{
 #if defined(_WIN32)
@@ -826,21 +848,31 @@ namespace mj::config
 			std::filesystem::path dest;
 			if (loadUnusable_) {
 				// The file was unusable at Load: preserve the original bytes under a name that never overwrites anything.
-				dest = iniPath_;
-				dest += ".unreadable";
-				for (int n = 1; std::filesystem::exists(dest, ec) && n < 1000; ++n) {
+				bool found = false;
+				for (int n = 0; n < 1000 && !found; ++n) {
 					dest = iniPath_;
-					dest += ".unreadable." + std::to_string(n);
+					dest += n == 0 ? std::string(".unreadable") : ".unreadable." + std::to_string(n);
+					ec.clear();
+					const bool taken = std::filesystem::exists(dest, ec);
+					if (ec) {
+						return fail("refusing to overwrite a settings file that could not be read: cannot check the preserved-copy name (" +
+									ec.message() + ")");
+					}
+					found = !taken;
+				}
+				if (!found) {
+					return fail("refusing to overwrite a settings file that could not be read: all preserved-copy names are taken");
 				}
 			} else {
 				dest = iniPath_;
 				dest += ".bak";  // previous GOOD file: replacing an older good backup is fine
 			}
-			std::filesystem::copy_file(iniPath_, dest, std::filesystem::copy_options::overwrite_existing, ec);
-			if (ec) {
+			std::string copyErr;
+			// Durable (flushed) before the original is replaced; the .unreadable copy never overwrites anything.
+			if (!CopyDurable(iniPath_, dest, loadUnusable_, copyErr)) {
 				return fail(std::string(loadUnusable_ ? "refusing to overwrite a settings file that could not be read: preserving it failed ("
 													  : "could not keep a backup of the previous settings file (") +
-							ec.message() + ")");
+							copyErr + ")");
 			}
 			Log(spdlog::level::info, std::string("previous settings file kept as ") + dest.filename().string());
 			loadUnusable_ = false;
