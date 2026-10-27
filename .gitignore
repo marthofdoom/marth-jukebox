@@ -15,3 +15,9 @@ compile_commands.json
 # secrets: never commit server keys
 *.key
 harmony*.txt
+
+# never commit audio
+*.wav
+*.xwm
+*.mp3
+*.flac
