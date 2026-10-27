@@ -230,16 +230,73 @@ namespace MJ::Net {
             return static_cast<std::size_t>(a_in.gcount()) == a_n;
         }
 
-        // Cancellable sleep in 50 ms slices.
-        bool SleepOrCancel(int a_ms, const std::function<bool()>& a_cancelled) {
-            auto left = a_ms;
-            while (left > 0) {
-                if (a_cancelled()) return false;
-                const int step = (std::min)(left, 50);
-                std::this_thread::sleep_for(std::chrono::milliseconds(step));
-                left -= step;
+        // Extra time the worker waits beyond WinHTTP's own timeout for an async op before it gives up
+        // on WinHTTP and abandons the request itself (kTimeout, logged loudly). Backstop only.
+        constexpr DWORD kWatchdogGraceMs = 5000;
+
+        // Per-request state shared with the WinHTTP async callback (WinHTTP runs in async mode).
+        // Heap-allocated, reference counted: one reference for the worker (dropped when it closes
+        // the handles) and one for WinHTTP (dropped on WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING, the
+        // last callback WinHTTP makes for a handle). Everything an in-flight async operation may
+        // still touch (read buffer, request body, header block, completion event) lives here, so a
+        // worker that abandons a request after a cancel never leaves WinHTTP writing into freed
+        // memory, and never has to wait for WinHTTP (or Wine) to actually unblock a socket.
+        struct ReqCtx {
+            std::atomic<long> refs{ 1 };
+            HANDLE            done = nullptr;  // auto-reset; set once per completed async op
+            // Written by the callback BEFORE SetEvent(done); read by the worker only after its wait
+            // returned on `done` (one op in flight at a time, so no concurrent write).
+            bool              ok    = false;
+            DWORD             err   = 0;
+            DWORD             bytes = 0;
+            std::wstring      headers;
+            std::string       body;
+            std::vector<char> buf;
+
+            ReqCtx() : done(::CreateEventW(nullptr, FALSE, FALSE, nullptr)), buf(kChunk) {}
+            ~ReqCtx() {
+                if (done) ::CloseHandle(done);
             }
-            return !a_cancelled();
+            ReqCtx(const ReqCtx&) = delete;
+            ReqCtx& operator=(const ReqCtx&) = delete;
+            void AddRef() { refs.fetch_add(1); }
+            void Release() {
+                if (refs.fetch_sub(1) == 1) delete this;
+            }
+            void Complete(bool a_ok, DWORD a_err, DWORD a_bytes) {
+                ok    = a_ok;
+                err   = a_err;
+                bytes = a_bytes;
+                ::SetEvent(done);
+            }
+        };
+
+        // Session-wide status callback (inherited by connect/request handles). Runs on a WinHTTP
+        // thread or inline inside a WinHTTP call; it only records the result and signals. Handles
+        // without a context (the session, connect handles, a request before its context is set)
+        // arrive with a_ctx == 0 and are ignored.
+        void CALLBACK OnWinHttpStatus(HINTERNET, DWORD_PTR a_ctx, DWORD a_status, LPVOID a_info, DWORD a_len) {
+            auto* const c = reinterpret_cast<ReqCtx*>(a_ctx);
+            if (!c) return;
+            switch (a_status) {
+            case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
+            case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
+                c->Complete(true, 0, 0);
+                break;
+            case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
+                c->Complete(true, 0, a_len);
+                break;
+            case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR: {
+                const auto* ar = static_cast<const WINHTTP_ASYNC_RESULT*>(a_info);
+                c->Complete(false, ar ? ar->dwError : static_cast<DWORD>(ERROR_WINHTTP_INTERNAL_ERROR), 0);
+                break;
+            }
+            case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
+                c->Release();  // WinHTTP's reference; nothing touches c after this
+                break;
+            default:
+                break;
+            }
         }
 
         long long MsSince(std::chrono::steady_clock::time_point a_t) {
@@ -299,6 +356,7 @@ namespace MJ::Net {
         case Error::kTruncated: return "truncated";
         case Error::kBadAudio: return "bad_audio";
         case Error::kPreviewOrTruncated: return "preview_or_truncated";
+        case Error::kTooLarge: return "too_large";
         }
         return "?";
     }
@@ -401,61 +459,96 @@ namespace MJ::Net {
         ParsedUrl           base;
         std::string         prefix;  // base path without trailing '/'
         std::wstring        wHost, wUserAgent, wKeyHeader;
-        HINTERNET           session = nullptr;
+        HINTERNET           session = nullptr;  // WINHTTP_FLAG_ASYNC, status callback OnWinHttpStatus
         std::atomic<bool>   cancelled{ false };
-        std::mutex          hmx;  // guards curConn/curReq
-        HINTERNET           curConn = nullptr;
-        HINTERNET           curReq  = nullptr;
+        // Cancellation is signalling only: Cancel()/ClearCancel() set/reset cancelEvt and the
+        // per-call stop_callback sets stopEvt. No WinHTTP call ever runs on the cancelling thread;
+        // the worker (the only thread that touches WinHTTP handles) wakes up and closes its own handles.
+        HANDLE              cancelEvt = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);  // manual reset, sticky
+        HANDLE              stopEvt   = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);  // manual reset, per call
 
-        ~Impl() { CloseSession(); }
+        Impl() = default;
+        ~Impl() {
+            CloseSession();
+            if (cancelEvt) ::CloseHandle(cancelEvt);
+            if (stopEvt) ::CloseHandle(stopEvt);
+        }
 
         void CloseSession() {
-            AbortCurrent();
             if (session) {
                 ::WinHttpCloseHandle(session);
                 session = nullptr;
             }
         }
 
-        void AbortCurrent() {
-            std::lock_guard l(hmx);
-            if (curReq) {
-                ::WinHttpCloseHandle(curReq);
-                curReq = nullptr;
-            }
-            if (curConn) {
-                ::WinHttpCloseHandle(curConn);
-                curConn = nullptr;
-            }
-        }
-
         bool Cancelled(const std::stop_token& a_st) const { return cancelled.load() || a_st.stop_requested(); }
 
-        // One request/response. Handles live in curConn/curReq so Cancel() can close them from
-        // another thread; the Exchange keeps local copies for its own calls.
+        // Start of every API call: arm the per-call stop event. The stop_callback the caller then
+        // registers only does SetEvent(stopEvt) (safe on any thread, including the game thread).
+        void ArmStop() { ::ResetEvent(stopEvt); }
+
+        // One request/response, owned by the worker thread for its whole life (every WinHTTP call
+        // on conn/req happens on this thread; nobody else ever sees the handles).
         struct Exchange {
-            Impl*        o;
             HINTERNET    conn = nullptr;
             HINTERNET    req  = nullptr;
+            ReqCtx*      ctx  = nullptr;  // the worker's reference
+            DWORD        recvMs = 0;
             int          status = 0;
             std::int64_t contentLength = -1;
             int          retryAfterS = 0;
-            explicit Exchange(Impl* a_o) : o(a_o) {}
+            Exchange() = default;
             Exchange(const Exchange&) = delete;
+            Exchange& operator=(const Exchange&) = delete;
             ~Exchange() { Close(); }
+            // Closing a request with an async op still pending cancels that op; WinHTTP then
+            // delivers HANDLE_CLOSING (possibly later, on its own thread) and drops its ctx ref.
             void Close() {
-                std::lock_guard l(o->hmx);
-                if (req && o->curReq == req) {
+                if (req) {
                     ::WinHttpCloseHandle(req);
-                    o->curReq = nullptr;
+                    req = nullptr;
                 }
-                if (conn && o->curConn == conn) {
+                if (conn) {
                     ::WinHttpCloseHandle(conn);
-                    o->curConn = nullptr;
+                    conn = nullptr;
                 }
-                req = conn = nullptr;
+                if (ctx) {
+                    ctx->Release();
+                    ctx = nullptr;
+                }
             }
         };
+
+        // Waits for the async op in flight on a_ctx, for cancel/stop, or for the watchdog budget.
+        Error WaitOp(ReqCtx& a_ctx, DWORD a_budgetMs, const std::stop_token& a_st, std::string& a_msg) const {
+            const HANDLE hs[3] = { a_ctx.done, cancelEvt, stopEvt };
+            const DWORD  w     = ::WaitForMultipleObjects(3, hs, FALSE, a_budgetMs);
+            if (w == WAIT_OBJECT_0) {
+                if (a_ctx.ok) return Error::kOk;
+                return TransportError(a_ctx.err, a_st, a_msg);
+            }
+            if (w == WAIT_OBJECT_0 + 1 || w == WAIT_OBJECT_0 + 2) {
+                a_msg = "cancelled";
+                return Error::kCancelled;
+            }
+            if (w == WAIT_TIMEOUT) {
+                spdlog::warn("[net] WinHTTP did not complete an operation within {} ms although its own timeout should have "
+                             "fired; abandoning the request",
+                             static_cast<unsigned long>(a_budgetMs));
+                a_msg = "timed out (WinHTTP did not complete; client watchdog)";
+                return Error::kTimeout;
+            }
+            a_msg = std::format("wait failed (error {})", static_cast<unsigned long>(::GetLastError()));
+            return Error::kUnreachable;
+        }
+
+        // Cancellable sleep: false when cancelled/stopped.
+        bool SleepOrCancel(int a_ms, const std::stop_token& a_st) const {
+            if (Cancelled(a_st)) return false;
+            const HANDLE hs[2] = { cancelEvt, stopEvt };
+            const DWORD  w     = ::WaitForMultipleObjects(2, hs, FALSE, static_cast<DWORD>(a_ms));
+            return w == WAIT_TIMEOUT && !Cancelled(a_st);
+        }
 
         Error TransportError(DWORD a_err, const std::stop_token& a_st, std::string& a_msg) const {
             if (Cancelled(a_st)) {
@@ -478,46 +571,79 @@ namespace MJ::Net {
                 r.error = TransportError(a_e, a_st, r.message);
                 return r;
             };
+            auto local = [&](Error a_e, const char* a_what) {  // refused before any byte was sent
+                r.error   = a_e;
+                r.message = std::format("{} (error {})", a_what, static_cast<unsigned long>(::GetLastError()));
+                return r;
+            };
+            auto waitOp = [&](DWORD a_budgetMs) {
+                r.error = WaitOp(*a_ex.ctx, a_budgetMs, a_st, r.message);
+                return r.Ok();
+            };
             if (Cancelled(a_st)) {
                 r.error   = Error::kCancelled;
                 r.message = "cancelled";
                 return r;
             }
+            a_ex.recvMs = static_cast<DWORD>(a_recvTimeoutMs);
+            a_ex.ctx    = new ReqCtx();
+            if (!a_ex.ctx->done) return local(Error::kUnreachable, "CreateEvent failed");
             a_ex.conn = ::WinHttpConnect(session, wHost.c_str(), base.port, 0);
             if (!a_ex.conn) return fail(::GetLastError());
-            {
-                std::lock_guard l(hmx);
-                curConn = a_ex.conn;
-            }
             const std::wstring wTarget = Widen(a_target);
             a_ex.req = ::WinHttpOpenRequest(a_ex.conn, a_method, wTarget.c_str(), nullptr, WINHTTP_NO_REFERER,
                                             WINHTTP_DEFAULT_ACCEPT_TYPES, base.scheme == "https" ? WINHTTP_FLAG_SECURE : 0);
             if (!a_ex.req) return fail(::GetLastError());
             {
-                std::lock_guard l(hmx);
-                curReq = a_ex.req;
+                // WinHTTP's reference on the context; released by HANDLE_CLOSING once the value is set.
+                a_ex.ctx->AddRef();
+                DWORD_PTR cv = reinterpret_cast<DWORD_PTR>(a_ex.ctx);
+                if (!::WinHttpSetOption(a_ex.req, WINHTTP_OPTION_CONTEXT_VALUE, &cv, sizeof cv)) {
+                    a_ex.ctx->Release();  // never attached, so no HANDLE_CLOSING will carry it
+                    return local(Error::kUnreachable, "WinHTTP refused the request context");
+                }
             }
-            if (Cancelled(a_st)) {  // Cancel() may have run before the handles were registered
+            // Redirects are never followed (the key must not travel to another host). Both knobs,
+            // and a failure of either refuses the request instead of failing open.
+            DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+            if (!::WinHttpSetOption(a_ex.req, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof policy)) {
+                return local(Error::kBadConfig, "WinHTTP refused REDIRECT_POLICY_NEVER; request not sent");
+            }
+            DWORD noRedirects = WINHTTP_DISABLE_REDIRECTS;
+            if (!::WinHttpSetOption(a_ex.req, WINHTTP_OPTION_DISABLE_FEATURE, &noRedirects, sizeof noRedirects)) {
+                return local(Error::kBadConfig, "WinHTTP refused DISABLE_REDIRECTS; request not sent");
+            }
+            if (!::WinHttpSetTimeouts(a_ex.req, cfg.connectTimeoutMs, cfg.connectTimeoutMs, cfg.sendTimeoutMs, a_recvTimeoutMs)) {
+                return local(Error::kBadConfig, "WinHTTP refused the timeouts; request not sent");
+            }
+
+            // Header block and body live in the context: an async send may still read them after
+            // this worker has abandoned the request.
+            ReqCtx& c = *a_ex.ctx;
+            c.headers = L"Accept: ";
+            c.headers += a_accept;
+            c.headers += L"\r\n";
+            c.headers += wKeyHeader;
+            if (a_body) {
+                c.headers += L"Content-Type: application/json\r\n";
+                c.body = *a_body;
+            }
+            LPVOID      data = a_body ? static_cast<LPVOID>(c.body.data()) : WINHTTP_NO_REQUEST_DATA;
+            const DWORD dlen = a_body ? static_cast<DWORD>(c.body.size()) : 0;
+            if (Cancelled(a_st)) {
                 r.error   = Error::kCancelled;
                 r.message = "cancelled";
                 return r;
             }
-            DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
-            ::WinHttpSetOption(a_ex.req, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof policy);
-            ::WinHttpSetTimeouts(a_ex.req, cfg.connectTimeoutMs, cfg.connectTimeoutMs, cfg.sendTimeoutMs, a_recvTimeoutMs);
-
-            std::wstring headers = L"Accept: ";
-            headers += a_accept;
-            headers += L"\r\n";
-            headers += wKeyHeader;
-            if (a_body) headers += L"Content-Type: application/json\r\n";
-
-            LPVOID      data = a_body ? const_cast<char*>(a_body->data()) : WINHTTP_NO_REQUEST_DATA;
-            const DWORD dlen = a_body ? static_cast<DWORD>(a_body->size()) : 0;
-            if (!::WinHttpSendRequest(a_ex.req, headers.c_str(), static_cast<DWORD>(-1), data, dlen, dlen, 0)) {
+            if (!::WinHttpSendRequest(a_ex.req, c.headers.c_str(), static_cast<DWORD>(-1), data, dlen, dlen,
+                                      reinterpret_cast<DWORD_PTR>(a_ex.ctx))) {
                 return fail(::GetLastError());
             }
+            // Resolve + connect + TLS + send, then the server's answer (which includes a wait= phase).
+            const DWORD sendBudget = static_cast<DWORD>(2 * cfg.connectTimeoutMs + cfg.sendTimeoutMs + a_recvTimeoutMs) + kWatchdogGraceMs;
+            if (!waitOp(sendBudget)) return r;
             if (!::WinHttpReceiveResponse(a_ex.req, nullptr)) return fail(::GetLastError());
+            if (!waitOp(a_ex.recvMs + kWatchdogGraceMs)) return r;
 
             DWORD status = 0;
             DWORD len    = sizeof status;
@@ -544,27 +670,34 @@ namespace MJ::Net {
             return r;
         }
 
+        // One async WinHttpReadData into a_ex.ctx->buf; a_n = bytes read (0 = end of body).
+        Error ReadChunk(Exchange& a_ex, DWORD& a_n, const std::stop_token& a_st, std::string& a_msg) {
+            a_n = 0;
+            if (Cancelled(a_st)) {
+                a_msg = "cancelled";
+                return Error::kCancelled;
+            }
+            // Async mode: the byte count arrives in READ_COMPLETE, never through the out pointer.
+            if (!::WinHttpReadData(a_ex.req, a_ex.ctx->buf.data(), static_cast<DWORD>(a_ex.ctx->buf.size()), nullptr)) {
+                return TransportError(::GetLastError(), a_st, a_msg);
+            }
+            const Error e = WaitOp(*a_ex.ctx, a_ex.recvMs + kWatchdogGraceMs, a_st, a_msg);
+            if (e == Error::kOk) a_n = (std::min)(a_ex.ctx->bytes, static_cast<DWORD>(a_ex.ctx->buf.size()));
+            return e;
+        }
+
         // Reads up to a_cap bytes of the body (stops at end of body or the cap).
         Result ReadBody(Exchange& a_ex, std::string& a_out, std::size_t a_cap, const std::stop_token& a_st) {
             Result r;
-            std::vector<char> buf(kChunk);
             while (true) {
-                if (Cancelled(a_st)) {
-                    r.error   = Error::kCancelled;
-                    r.message = "cancelled";
-                    return r;
-                }
                 DWORD n = 0;
-                if (!::WinHttpReadData(a_ex.req, buf.data(), static_cast<DWORD>(buf.size()), &n)) {
-                    r.error = TransportError(::GetLastError(), a_st, r.message);
-                    return r;
-                }
-                if (n == 0) return r;
+                r.error = ReadChunk(a_ex, n, a_st, r.message);
+                if (!r.Ok() || n == 0) return r;
                 if (a_out.size() + n > a_cap) {
-                    a_out.append(buf.data(), a_cap - a_out.size());
+                    a_out.append(a_ex.ctx->buf.data(), a_cap - a_out.size());
                     return r;  // enough; remaining body is dropped with the connection
                 }
-                a_out.append(buf.data(), n);
+                a_out.append(a_ex.ctx->buf.data(), n);
             }
         }
 
@@ -606,7 +739,7 @@ namespace MJ::Net {
             }
             const std::string target = prefix + a_path;
             const auto        t0     = std::chrono::steady_clock::now();
-            Exchange          ex(this);
+            Exchange          ex;
             r = Open(a_method, target, a_body, L"application/json", cfg.receiveTimeoutMs, a_st, ex);
             if (!r.Ok()) {
                 Log(a_methodName, target, 0, ErrorName(r.error), MsSince(t0));
@@ -627,7 +760,8 @@ namespace MJ::Net {
 
         // ---- API implementations ----
         StatusResult DoStatus(const std::stop_token& a_st) {
-            std::stop_callback cb(a_st, [this] { AbortCurrent(); });
+            ArmStop();  // the stop callback below only signals; it never calls WinHTTP
+            std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
             StatusResult       out;
             std::string        body;
             static_cast<Result&>(out) = Roundtrip(L"GET", "GET", "/api/game/status", nullptr, a_st, body);
@@ -659,7 +793,8 @@ namespace MJ::Net {
         }
 
         Result DoPutProfile(std::string_view a_name, std::string_view a_json, const std::stop_token& a_st) {
-            std::stop_callback cb(a_st, [this] { AbortCurrent(); });
+            ArmStop();  // the stop callback below only signals; it never calls WinHTTP
+            std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
             Result             r;
             bool               nameOk = !a_name.empty() && a_name.size() <= 64;
             for (std::size_t i = 0; i < a_name.size() && nameOk; ++i) {
@@ -700,16 +835,37 @@ namespace MJ::Net {
             return t;
         }
 
+        // Serialises a request body. Strings that are not valid UTF-8 are REJECTED (kBadRequest, no
+        // request sent) rather than silently altered; nlohmann's strict dump throws on them.
+        static bool DumpRequest(const json& a_req, std::string& a_out, Result& a_r) {
+            try {
+                a_out = a_req.dump(-1, ' ', false, json::error_handler_t::strict);
+                return true;
+            } catch (const std::exception&) {
+                a_r.error   = Error::kBadRequest;
+                a_r.message = "request field is not valid UTF-8";
+                return false;
+            }
+        }
+
         NextResult DoNext(std::string_view a_profile, std::string_view a_type, std::string_view a_sources, int a_count,
                           bool a_peek, std::string_view a_container, const std::stop_token& a_st) {
-            std::stop_callback cb(a_st, [this] { AbortCurrent(); });
+            ArmStop();  // the stop callback below only signals; it never calls WinHTTP
+            std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
             NextResult         out;
-            json req = { { "profile", std::string(a_profile) }, { "type", std::string(a_type) } };
-            if (!a_sources.empty()) req["sources"] = std::string(a_sources);
-            if (a_count > 0) req["count"] = (std::min)(a_count, 10);
-            if (a_peek) req["peek"] = true;
-            if (!a_container.empty()) req["container"] = std::string(a_container);
-            const std::string reqBody = req.dump();
+            std::string        reqBody;
+            try {
+                json req = { { "profile", std::string(a_profile) }, { "type", std::string(a_type) } };
+                if (!a_sources.empty()) req["sources"] = std::string(a_sources);
+                if (a_count > 0) req["count"] = (std::min)(a_count, 10);
+                if (a_peek) req["peek"] = true;
+                if (!a_container.empty()) req["container"] = std::string(a_container);
+                if (!DumpRequest(req, reqBody, out)) return out;
+            } catch (const std::exception& e) {
+                out.error   = Error::kBadRequest;
+                out.message = std::string("cannot build next request: ") + e.what();
+                return out;
+            }
             std::string       body;
             static_cast<Result&>(out) = Roundtrip(L"POST", "POST", "/api/game/next", &reqBody, a_st, body);
             if (!out.Ok()) return out;
@@ -737,7 +893,8 @@ namespace MJ::Net {
         }
 
         SearchResult DoSearch(std::string_view a_query, std::string_view a_kinds, int a_limit, const std::stop_token& a_st) {
-            std::stop_callback cb(a_st, [this] { AbortCurrent(); });
+            ArmStop();  // the stop callback below only signals; it never calls WinHTTP
+            std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
             SearchResult       out;
             std::string        path = "/api/search?q=" + UrlEncode(a_query);
             if (!a_kinds.empty()) path += "&kinds=" + UrlEncode(a_kinds);
@@ -772,6 +929,31 @@ namespace MJ::Net {
                 out.message = std::string("bad search response: ") + e.what();
             }
             return out;
+        }
+
+        // POST /api/game/playing {profile, type, service, id} (all four required by the server).
+        Result DoPlaying(std::string_view a_profile, std::string_view a_type, std::string_view a_service, std::string_view a_id,
+                         const std::stop_token& a_st) {
+            ArmStop();  // the stop callback below only signals; it never calls WinHTTP
+            std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
+            Result             r;
+            if (a_profile.empty() || a_type.empty() || a_service.empty() || a_id.empty()) {
+                r.error   = Error::kBadRequest;
+                r.message = "playing report needs profile, type, service and id";
+                return r;
+            }
+            std::string reqBody;
+            try {
+                const json req = { { "profile", std::string(a_profile) }, { "type", std::string(a_type) },
+                                   { "service", std::string(a_service) }, { "id", std::string(a_id) } };
+                if (!DumpRequest(req, reqBody, r)) return r;
+            } catch (const std::exception& e) {
+                r.error   = Error::kBadRequest;
+                r.message = std::string("cannot build playing report: ") + e.what();
+                return r;
+            }
+            std::string ignored;
+            return Roundtrip(L"POST", "POST", "/api/game/playing", &reqBody, a_st, ignored);
         }
 
         // Relative URLs are rooted at the base prefix; absolute ones must name the same host:port.
@@ -812,7 +994,8 @@ namespace MJ::Net {
 
         DownloadResult DoDownload(std::string_view a_audioUrl, const fs::path& a_dest, double a_expectedS,
                                   const std::stop_token& a_st) {
-            std::stop_callback cb(a_st, [this] { AbortCurrent(); });
+            ArmStop();  // the stop callback below only signals; it never calls WinHTTP
+            std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
             DownloadResult     out;
             auto fail = [&](Error a_e, std::string a_msg) -> DownloadResult {
                 out.error   = a_e;
@@ -837,12 +1020,11 @@ namespace MJ::Net {
 
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(cfg.downloadDeadlineS);
             const int  recvMs   = (std::max)(cfg.receiveTimeoutMs, (cfg.waitS + 10) * 1000);
-            const auto isCancelled = [&] { return Cancelled(a_st); };
 
             while (true) {
                 if (Cancelled(a_st)) return fail(Error::kCancelled, "cancelled");
                 const auto t0 = std::chrono::steady_clock::now();
-                Exchange   ex(this);
+                Exchange   ex;
                 Result     r = Open(L"GET", target, nullptr, L"*/*", recvMs, a_st, ex);
                 if (!r.Ok()) {
                     Log("GET", target, 0, ErrorName(r.error), MsSince(t0));
@@ -861,7 +1043,7 @@ namespace MJ::Net {
                     if (now + std::chrono::seconds(waitS) > deadline) {
                         return fail(Error::kDeadline, std::format("still transcoding after {} s", cfg.downloadDeadlineS));
                     }
-                    if (!SleepOrCancel(waitS * 1000, isCancelled)) return fail(Error::kCancelled, "cancelled");
+                    if (!SleepOrCancel(waitS * 1000, a_st)) return fail(Error::kCancelled, "cancelled");
                     continue;
                 }
                 if (ex.status != 200) {
@@ -885,21 +1067,24 @@ namespace MJ::Net {
                     Log("GET", target, 200, "", MsSince(t0));
                     return fail(Error::kBadResponse, "200 without a usable Content-Length");
                 }
+                // Size bound, checked BEFORE anything is created on disk.
+                if (ex.contentLength > cfg.maxDownloadBytes) {
+                    Log("GET", target, 200, "", MsSince(t0));
+                    return fail(Error::kTooLarge, std::format("Content-Length {} exceeds the {} byte download limit", ex.contentLength,
+                                                              cfg.maxDownloadBytes));
+                }
                 FileHandle fh;
                 fh.h = ::CreateFileW(guard.path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
                 if (fh.h == INVALID_HANDLE_VALUE) {
                     return fail(Error::kIo, std::format("cannot create .part file (error {})", static_cast<unsigned long>(::GetLastError())));
                 }
-                std::vector<char> buf(kChunk);
-                std::int64_t      got = 0;
+                std::int64_t got = 0;
                 while (true) {
-                    if (Cancelled(a_st)) return fail(Error::kCancelled, "cancelled");
-                    DWORD n = 0;
-                    if (!::WinHttpReadData(ex.req, buf.data(), static_cast<DWORD>(buf.size()), &n)) {
-                        const DWORD le = ::GetLastError();
+                    DWORD       n = 0;
+                    std::string m;
+                    const Error e = ReadChunk(ex, n, a_st, m);
+                    if (e != Error::kOk) {
                         Log("GET", target, 0, "read failed", MsSince(t0));
-                        std::string m;
-                        const Error e = TransportError(le, a_st, m);
                         if (e == Error::kUnreachable) {
                             return fail(Error::kTruncated, std::format("connection lost after {} of {} bytes ({})", got, ex.contentLength, m));
                         }
@@ -908,8 +1093,12 @@ namespace MJ::Net {
                     if (n == 0) break;
                     got += n;
                     if (got > ex.contentLength) return fail(Error::kBadResponse, "body longer than Content-Length");
-                    DWORD written = 0;
-                    if (!::WriteFile(fh.h, buf.data(), n, &written, nullptr) || written != n) {
+                    if (got > cfg.maxDownloadBytes) {
+                        return fail(Error::kTooLarge, std::format("body exceeds the {} byte download limit", cfg.maxDownloadBytes));
+                    }
+                    const char* const buf     = ex.ctx->buf.data();
+                    DWORD             written = 0;
+                    if (!::WriteFile(fh.h, buf, n, &written, nullptr) || written != n) {
                         return fail(Error::kIo, std::format("write failed (error {})", static_cast<unsigned long>(::GetLastError())));
                     }
                 }
@@ -974,19 +1163,32 @@ namespace MJ::Net {
         }
         if (a_cfg.waitS < 0 || a_cfg.waitS > 120) return bad("waitS must be 0..120");
         if (a_cfg.downloadDeadlineS < 1 || a_cfg.downloadDeadlineS > 3600) return bad("downloadDeadlineS must be 1..3600");
+        if (a_cfg.maxDownloadBytes < 4096 || a_cfg.maxDownloadBytes > (std::int64_t{ 64 } << 30)) {
+            return bad("maxDownloadBytes must be 4096 .. 64 GiB");
+        }
+        if (!o.cancelEvt || !o.stopEvt) return bad("CreateEvent failed");
 
         o.CloseSession();
+        o.configured = false;
         o.cfg        = a_cfg;
         o.base       = base;
         o.prefix     = prefix;
         o.wHost      = Widen(base.host);
         o.wUserAgent = Widen(a_cfg.userAgent);
         o.wKeyHeader = a_cfg.personalKey.empty() ? std::wstring() : L"X-Harmony-Key: " + Widen(a_cfg.personalKey) + L"\r\n";
+        // Async session: every blocking point becomes an event the worker waits on together with
+        // the cancel/stop events, so a cancel never depends on WinHTTP (or Wine) unblocking a socket.
         o.session    = ::WinHttpOpen(o.wUserAgent.c_str(), WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
-                                     WINHTTP_NO_PROXY_BYPASS, 0);
+                                     WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC);
         if (!o.session) {
-            o.configured = false;
             return bad(std::format("WinHttpOpen failed (error {})", static_cast<unsigned long>(::GetLastError())));
+        }
+        if (::WinHttpSetStatusCallback(o.session, OnWinHttpStatus,
+                                       WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES,
+                                       0) == WINHTTP_INVALID_STATUS_CALLBACK) {
+            const DWORD le = ::GetLastError();
+            o.CloseSession();
+            return bad(std::format("WinHttpSetStatusCallback failed (error {})", static_cast<unsigned long>(le)));
         }
         o.configured = true;
         spdlog::info("[net] configured: {}://{}:{}{} (key {})", base.scheme, base.host, base.port, prefix,
@@ -994,13 +1196,22 @@ namespace MJ::Net {
         return r;
     }
 
+    // Signalling only (no WinHTTP call, no lock, no wait): safe from the game thread.
     void HarmonyClient::Cancel() {
         impl_->cancelled.store(true);
-        impl_->AbortCurrent();
+        ::SetEvent(impl_->cancelEvt);
     }
-    void HarmonyClient::ClearCancel() { impl_->cancelled.store(false); }
+    void HarmonyClient::ClearCancel() {
+        impl_->cancelled.store(false);
+        ::ResetEvent(impl_->cancelEvt);
+    }
 
     StatusResult HarmonyClient::Status(std::stop_token a_st) { return impl_->DoStatus(a_st); }
+
+    Result HarmonyClient::ReportPlaying(std::string_view a_profile, std::string_view a_type, std::string_view a_service,
+                                        std::string_view a_id, std::stop_token a_st) {
+        return impl_->DoPlaying(a_profile, a_type, a_service, a_id, a_st);
+    }
 
     Result HarmonyClient::PutProfile(std::string_view a_name, std::string_view a_json, std::stop_token a_st) {
         return impl_->DoPutProfile(a_name, a_json, a_st);

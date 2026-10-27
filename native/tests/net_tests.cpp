@@ -131,7 +131,9 @@ namespace {
     }
 
     // ---------------------------------------------------------------------------------------
-    // scripted HTTP/1.1 server (one connection at a time, "Connection: close")
+    // scripted HTTP/1.1 server ("Connection: close"). Default: one connection at a time. Threaded:
+    // one thread per connection, so a stalled handler (or a connection the client abandoned after a
+    // cancel) never blocks the next request.
     struct Req {
         std::string method, target, body;
         std::map<std::string, std::string> headers;  // lower-case names
@@ -177,7 +179,7 @@ namespace {
     public:
         using Handler = std::function<void(const Req&, Conn&, int)>;
 
-        explicit Server(Handler a_h) : handler_(std::move(a_h)) {
+        explicit Server(Handler a_h, bool a_threaded = false) : handler_(std::move(a_h)), threaded_(a_threaded) {
             ls_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             sockaddr_in a{};
             a.sin_family      = AF_INET;
@@ -197,6 +199,9 @@ namespace {
             if (stop_.exchange(true)) return;
             ::closesocket(ls_);
             if (th_.joinable()) th_.join();
+            for (auto& w : workers_) {
+                if (w.joinable()) w.join();
+            }
         }
         std::uint16_t Port() const { return port_; }
         std::string   Url(const std::string& a_suffix = {}) const { return "http://127.0.0.1:" + std::to_string(port_) + a_suffix; }
@@ -214,7 +219,8 @@ namespace {
             while (!stop_.load()) {
                 SOCKET c = ::accept(ls_, nullptr, nullptr);
                 if (c == INVALID_SOCKET) break;
-                Serve(c);
+                if (threaded_) workers_.emplace_back([this, c] { Serve(c); });
+                else Serve(c);
             }
         }
         static bool ReadSome(SOCKET c, std::string& buf) {
@@ -278,6 +284,8 @@ namespace {
         }
 
         Handler           handler_;
+        bool              threaded_ = false;
+        std::vector<std::thread> workers_;  // threaded mode; touched only by the accept thread and Stop()
         SOCKET            ls_ = INVALID_SOCKET;
         std::uint16_t     port_ = 0;
         std::thread       th_;
@@ -783,6 +791,9 @@ namespace {
         Config c = MakeConfig("http://host");
         c.receiveTimeoutMs = 0;
         CHECK_ERR(cl.Configure(c), Error::kBadConfig);
+        c = MakeConfig("http://host");
+        c.maxDownloadBytes = 0;
+        CHECK_ERR(cl.Configure(c), Error::kBadConfig);
         // An unconfigured client fails cleanly instead of crashing.
         HarmonyClient fresh;
         CHECK_ERR(fresh.Status(), Error::kBadConfig);
@@ -821,6 +832,337 @@ namespace {
         CHECK(a.format == "flac" && a.sampleRate == 48000 && a.channels == 1 && a.bitsPerSample == 24 && a.durationS > 9.99 && a.durationS < 10.01);
         WriteBytes(dir / "nototal.flac", MakeFlac(48000, 1, 24, 0));
         CHECK_ERR(ProbeAudioFile(dir / "nototal.flac", a), Error::kBadAudio);
+    }
+
+    // ---- review fixes (net-client-fix) ----
+
+    // Every 3xx to ANOTHER server (different port on loopback): never followed, so the key header
+    // never reaches it, for GET (status, audio) and POST (next, 307/308 would re-send the body).
+    void T_RedirectNeverLeaksKey() {
+        const fs::path dir = TestDir();
+        Server victim([](const Req&, Conn& c, int) { c.Send(Resp(200, "OK", R"({"enabled":true})")); });
+        for (const int code : { 301, 302, 303, 307, 308 }) {
+            Server s([&](const Req& r, Conn& c, int) {
+                c.Send(Resp(code, "Redirect", "", "Location: " + victim.Url(r.target) + "\r\n"));
+            });
+            HarmonyClient cl;
+            Configured(cl, MakeConfig(s.Url(), "SECRET-KEY-123"));
+            CHECK_ERR(cl.Status(), Error::kRedirect);
+            CHECK_ERR(cl.Next("skyrim", "explore", "", 1, false, ""), Error::kRedirect);
+            CHECK_ERR(cl.DownloadAudio(kAudioUrl, dir / "r.wav", 0.0), Error::kRedirect);
+            CHECK_ERR(cl.ReportPlaying("skyrim", "explore", "local", "abc"), Error::kRedirect);
+            const auto seen = s.Seen();
+            CHECK(seen.size() == 4);
+            for (const auto& r : seen) CHECK(r.headers.count("x-harmony-key") == 1);  // the key went to the configured server only
+            if (!victim.Seen().empty()) Fail(__LINE__, "redirect target was contacted", "HTTP " + std::to_string(code));
+        }
+        CHECK(victim.Seen().empty());
+        CHECK(CountFiles(dir) == 0);
+    }
+
+    // Non-UTF-8 strings in JSON request fields are rejected locally (no throw, no request).
+    void T_NonUtf8Rejected() {
+        Server s([](const Req& r, Conn& c, int) {
+            if (r.target == "/api/game/playing") c.Send(Resp(200, "OK", R"({"ok":true})"));
+            else c.Send(Resp(200, "OK", R"({"type":"default","pool_size":1,"tracks":[]})"));
+        });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        CHECK_ERR(cl.Next("\xff\xfe", "explore", "", 1, false, ""), Error::kBadRequest);
+        CHECK_ERR(cl.Next("skyrim", "expl\xc3", "", 1, false, ""), Error::kBadRequest);
+        CHECK_ERR(cl.Next("skyrim", "explore", "lib\x80rary", 1, false, ""), Error::kBadRequest);
+        CHECK_ERR(cl.Next("skyrim", "explore", "", 1, false, "wav\xed\xa0\x80"), Error::kBadRequest);  // UTF-16 surrogate
+        CHECK_ERR(cl.ReportPlaying("skyrim", "explore", "local", "id\xff"), Error::kBadRequest);
+        CHECK_ERR(cl.ReportPlaying("sky\xc0\xafrim", "explore", "local", "id"), Error::kBadRequest);  // overlong '/'
+        CHECK(s.Seen().empty());
+        // Valid non-ASCII UTF-8 goes through unchanged.
+        const std::string type = "\xc3\x9cnic\xc3\xb8" "de";
+        CHECK_ERR(cl.Next("skyrim", type, "", 1, false, ""), Error::kOk);
+        const auto seen = s.Seen();
+        CHECK(seen.size() == 1);
+        if (seen.size() == 1) {
+            const json b = json::parse(seen[0].body, nullptr, false);
+            CHECK(b.is_object() && b.value("type", "") == type);
+        }
+    }
+
+    // Size bound: Content-Length above maxDownloadBytes fails BEFORE the .part exists.
+    void T_DownloadTooLarge() {
+        const fs::path dir = TestDir();
+        const std::string wav = MakeWav(8000, 1, 16, 1.0);  // 16 044 bytes
+        Server s([&](const Req&, Conn& c, int) { c.Send(AudioHead(wav.size()) + wav); });
+        HarmonyClient cl;
+        Config cfg = MakeConfig(s.Url());
+        cfg.maxDownloadBytes = 8192;
+        Configured(cl, cfg);
+        const DownloadResult r = cl.DownloadAudio(kAudioUrl, dir / "big.wav", 0.0);
+        CHECK_ERR(r, Error::kTooLarge);
+        CHECK(r.bytes == 0 && CountFiles(dir) == 0);
+        cfg.maxDownloadBytes = 16044;  // exactly the size: allowed
+        Configured(cl, cfg);
+        CHECK_ERR(cl.DownloadAudio(kAudioUrl, dir / "ok.wav", 0.0), Error::kOk);
+        CHECK(CountFiles(dir) == 1);
+
+        // Default limit (256 MiB): a 300 MiB Content-Length is refused from the header alone; the
+        // server sends no body at all, so anything but kTooLarge (e.g. kTruncated) means the body was read.
+        const fs::path dir2 = dir / "default";
+        fs::create_directories(dir2);
+        s.SetHandler([](const Req&, Conn& c, int) { c.Send(AudioHead(300ull * 1024 * 1024)); });
+        HarmonyClient cd;
+        Configured(cd, MakeConfig(s.Url()));
+        CHECK_ERR(cd.DownloadAudio(kAudioUrl, dir2 / "huge.wav", 0.0), Error::kTooLarge);
+        CHECK(CountFiles(dir2) == 0);
+    }
+
+    // Bytes beyond Content-Length are never written. (a) plain trailing junk after the declared
+    // body; (b) a chunked body longer than a contradicting Content-Length.
+    void T_DownloadBodyLongerThanContentLength() {
+        const fs::path dir = TestDir();
+        const std::string wav = MakeWav(8000, 1, 16, 2.0);
+        Server s([&](const Req&, Conn& c, int) { c.Send(AudioHead(wav.size()) + wav + std::string(200000, 'J')); });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        const DownloadResult a = cl.DownloadAudio(kAudioUrl, dir / "a.wav", 0.0);
+        CHECK_ERR(a, Error::kOk);
+        CHECK(fs::exists(dir / "a.wav") && fs::file_size(dir / "a.wav") == wav.size());
+
+        s.SetHandler([&](const Req&, Conn& c, int) {
+            std::string body = wav + std::string(100000, 'J');
+            std::string out  = "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: " + std::to_string(wav.size()) +
+                              "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+            for (std::size_t off = 0; off < body.size(); off += 30000) {
+                const std::size_t n = (std::min<std::size_t>)(30000, body.size() - off);
+                char hex[32];
+                std::snprintf(hex, sizeof hex, "%zx\r\n", n);
+                out += hex;
+                out += body.substr(off, n);
+                out += "\r\n";
+            }
+            out += "0\r\n\r\n";
+            c.Send(out);
+        });
+        const DownloadResult b = cl.DownloadAudio(kAudioUrl, dir / "b.wav", 0.0);
+        // Whichever framing WinHTTP picks, no file larger than Content-Length may appear.
+        if (b.Ok()) CHECK(fs::file_size(dir / "b.wav") == wav.size());
+        else CHECK(!fs::exists(dir / "b.wav"));
+        CHECK(!fs::exists(dir / "b.wav.part") && CountFiles(dir) <= 2);
+        std::printf("    (chunked + contradicting Content-Length -> %s)\n", ErrorName(b.error));
+    }
+
+    void T_ReportPlaying() {
+        Server s([](const Req&, Conn& c, int) {
+            c.Send(Resp(200, "OK", R"({"ok":true,"now_playing":{"profile":"skyrim","type":"explore","service":"local","id":"87fbeaab3e0ef480","title":null,"age_s":0.0}})"));
+        });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url(), "SECRET-KEY-123"));
+        CHECK_ERR(cl.ReportPlaying("skyrim", "explore", "local", "87fbeaab3e0ef480"), Error::kOk);
+        auto seen = s.Seen();
+        CHECK(seen.size() == 1);
+        if (seen.size() == 1) {
+            CHECK(seen[0].method == "POST" && seen[0].target == "/api/game/playing");
+            CHECK(seen[0].headers.count("x-harmony-key") == 1 && seen[0].headers.at("content-type").find("application/json") == 0);
+            const json b = json::parse(seen[0].body, nullptr, false);
+            CHECK(b.is_object() && b.size() == 4);  // the server rejects unknown keys
+            CHECK(b.value("profile", "") == "skyrim" && b.value("type", "") == "explore" && b.value("service", "") == "local" &&
+                  b.value("id", "") == "87fbeaab3e0ef480");
+        }
+        // Missing fields are refused locally.
+        CHECK_ERR(cl.ReportPlaying("skyrim", "explore", "local", ""), Error::kBadRequest);
+        CHECK_ERR(cl.ReportPlaying("", "explore", "local", "x"), Error::kBadRequest);
+        CHECK(s.Seen().size() == 1);
+        // Server-side refusal is a returned error with the code.
+        s.SetHandler([](const Req&, Conn& c, int) { c.Send(ErrResp(400, "Bad Request", "bad_request", "unknown key(s): x")); });
+        const Result bad = cl.ReportPlaying("skyrim", "explore", "local", "x");
+        CHECK_ERR(bad, Error::kBadRequest);
+        CHECK(bad.code == "bad_request");
+        s.SetHandler([](const Req&, Conn& c, int) { c.Send(ErrResp(403, "Forbidden", "disabled", "game source disabled")); });
+        CHECK_ERR(cl.ReportPlaying("skyrim", "explore", "local", "x"), Error::kDisabled);
+        // Harmony away: an error, not a throw.
+        s.Stop();
+        const Result away = cl.ReportPlaying("skyrim", "explore", "local", "x");
+        CHECK(away.error == Error::kUnreachable || away.error == Error::kTimeout);
+    }
+
+    // Cancel while the server holds the request in its wait= phase (no status line yet: the client
+    // is inside WinHttpReceiveResponse). Both Cancel() and the stop token; the client must stay usable.
+    void RunCancelInWaitPhase(bool a_useStopToken) {
+        const fs::path dir = TestDir();
+        std::atomic<bool> gotRequest{ false };
+        Server s(
+            [&](const Req& r, Conn& c, int) {
+                if (r.target == "/api/game/status") {
+                    c.Send(Resp(200, "OK", R"({"enabled":true})"));
+                    return;
+                }
+                gotRequest = true;
+                c.Wait(20000);  // a server blocking in wait=: sends nothing
+            },
+            true);
+        HarmonyClient cl;
+        Config cfg = MakeConfig(s.Url());
+        cfg.receiveTimeoutMs = 20000;
+        cfg.waitS            = 30;  // => receive timeout 40 s: only the cancel can end this in time
+        Configured(cl, cfg);
+        std::stop_source ss;
+        DownloadResult   r;
+        std::thread      t([&] { r = cl.DownloadAudio(kAudioUrl, dir / "w.wav", 0.0, a_useStopToken ? ss.get_token() : std::stop_token{}); });
+        for (int i = 0; i < 200 && !gotRequest; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(gotRequest.load());
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        const auto t0 = std::chrono::steady_clock::now();
+        if (a_useStopToken) ss.request_stop();
+        else cl.Cancel();
+        const long long signalMs = MsSince(t0);
+        t.join();
+        const long long ms = MsSince(t0);
+        CHECK_ERR(r, Error::kCancelled);
+        CHECK(signalMs < 200);  // signalling only: never blocks the caller
+        if (ms >= 1500) Fail(__LINE__, "cancel latency", std::to_string(ms) + " ms");
+        CHECK(CountFiles(dir) == 0);
+        // Reusable afterwards (the abandoned request must not poison the next one).
+        cl.ClearCancel();
+        CHECK_ERR(cl.Status(), Error::kOk);
+        s.Stop();
+    }
+    void T_CancelInWaitPhase() { RunCancelInWaitPhase(false); }
+    void T_StopTokenInWaitPhase() { RunCancelInWaitPhase(true); }
+
+    // Cancel racing the start of a request: random delays from 0 to ~2 ms around the call start.
+    // Every outcome must be kOk or kCancelled, promptly, with no crash and no hang.
+    void T_CancelRacingStart() {
+        Server s([](const Req&, Conn& c, int) { c.Send(Resp(200, "OK", R"({"enabled":true,"cache":{"files":7}})")); }, true);
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        std::uint32_t rng = 12345;
+        int ok = 0, cancelled = 0;
+        for (int i = 0; i < 300; ++i) {
+            rng = rng * 1664525u + 1013904223u;
+            const int  delayUs = static_cast<int>((rng >> 8) % 2000);
+            const bool useStop = (i & 1) != 0;
+            cl.ClearCancel();
+            std::stop_source ss;
+            StatusResult     r;
+            std::thread      t([&] { r = cl.Status(useStop ? ss.get_token() : std::stop_token{}); });
+            if (delayUs > 0) std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+            const auto t0 = std::chrono::steady_clock::now();
+            if (useStop) ss.request_stop();
+            else cl.Cancel();
+            t.join();
+            const long long ms = MsSince(t0);
+            if (r.error == Error::kOk) {
+                ++ok;
+                if (r.cache.files != 7) Fail(__LINE__, "wrong body after a race", std::to_string(i));
+            } else if (r.error == Error::kCancelled) {
+                ++cancelled;
+            } else {
+                Fail(__LINE__, "iteration " + std::to_string(i), std::string("got ") + ErrorName(r.error) + " (" + r.message + ")");
+            }
+            if (ms > 3000) Fail(__LINE__, "slow cancel in iteration " + std::to_string(i), std::to_string(ms) + " ms");
+            if (g_curFailed) break;
+        }
+        std::printf("    (%d ok, %d cancelled)\n", ok, cancelled);
+        cl.ClearCancel();
+        CHECK_ERR(cl.Status(), Error::kOk);
+    }
+
+    // Two clients, each with its own server, cancel/start cycles in parallel (status and downloads
+    // so cancels land in connect, wait, headers and mid-body). Any result must be kOk/kCancelled and
+    // carry ITS server's data: catches handle reuse / cross-talk between clients.
+    void T_CancelStressTwoClients() {
+        const fs::path dir = TestDir();
+        struct Side {
+            int                     id;
+            std::string             wav;
+            std::unique_ptr<Server> srv;
+            HarmonyClient           cl;
+            fs::path                dir;
+            int                     ok = 0, cancelled = 0;
+            std::vector<std::string> errors;
+        };
+        Side sides[2];
+        for (int k = 0; k < 2; ++k) {
+            Side& sd = sides[k];
+            sd.id    = k + 1;
+            sd.wav   = MakeWav(8000, 2, 16, 4.0 + k);  // 128 KB / 160 KB: more than one read chunk
+            sd.dir   = dir / std::to_string(sd.id);
+            fs::create_directories(sd.dir);
+            sd.srv = std::make_unique<Server>(
+                [&sd](const Req& r, Conn& c, int) {
+                    if (r.target == "/api/game/status") {
+                        c.Send(Resp(200, "OK", "{\"enabled\":true,\"cache\":{\"files\":" + std::to_string(sd.id) + "}}"));
+                        return;
+                    }
+                    // Head, a slice, a short stall, the rest: gives cancels a mid-body window.
+                    c.Send(AudioHead(sd.wav.size()) + sd.wav.substr(0, 70000));
+                    if (!c.Wait(2)) return;
+                    c.Send(sd.wav.substr(70000));
+                },
+                true);
+            Configured(sd.cl, MakeConfig(sd.srv->Url()));
+        }
+        auto drive = [](Side& sd, std::uint32_t seed) {
+            std::uint32_t rng = seed;
+            for (int i = 0; i < 150; ++i) {
+                rng = rng * 1664525u + 1013904223u;
+                const int  delayUs  = static_cast<int>((rng >> 8) % 4000);
+                const bool useStop  = ((rng >> 4) & 1) != 0;
+                const bool download = ((rng >> 5) & 1) != 0;
+                sd.cl.ClearCancel();
+                std::stop_source ss;
+                Error            err = Error::kOk;
+                std::string      msg;
+                bool             dataOk = true;
+                const fs::path   dest   = sd.dir / (std::to_string(i) + ".wav");
+                std::thread      t([&] {
+                    const std::stop_token tok = useStop ? ss.get_token() : std::stop_token{};
+                    if (download) {
+                        const DownloadResult d = sd.cl.DownloadAudio(kAudioUrl, dest, 0.0, tok);
+                        err = d.error;
+                        msg = d.message;
+                        if (d.Ok()) dataOk = fs::file_size(dest) == sd.wav.size();
+                    } else {
+                        const StatusResult st = sd.cl.Status(tok);
+                        err = st.error;
+                        msg = st.message;
+                        if (st.Ok()) dataOk = st.cache.files == sd.id;
+                    }
+                });
+                std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+                const auto t0 = std::chrono::steady_clock::now();
+                if (useStop) ss.request_stop();
+                else sd.cl.Cancel();
+                t.join();
+                const long long ms = MsSince(t0);
+                if (err == Error::kOk) {
+                    ++sd.ok;
+                    if (!dataOk) sd.errors.push_back("iteration " + std::to_string(i) + ": OK result carries the other side's data");
+                } else if (err == Error::kCancelled) {
+                    ++sd.cancelled;
+                } else {
+                    sd.errors.push_back("iteration " + std::to_string(i) + ": " + ErrorName(err) + " (" + msg + ")");
+                }
+                if (ms > 3000) sd.errors.push_back("iteration " + std::to_string(i) + ": cancel took " + std::to_string(ms) + " ms");
+            }
+        };
+        std::thread a([&] { drive(sides[0], 1u); });
+        std::thread b([&] { drive(sides[1], 99u); });
+        a.join();
+        b.join();
+        for (Side& sd : sides) {
+            std::printf("    (client %d: %d ok, %d cancelled)\n", sd.id, sd.ok, sd.cancelled);
+            for (std::size_t e = 0; e < sd.errors.size() && e < 10; ++e) Fail(__LINE__, "client " + std::to_string(sd.id), sd.errors[e]);
+            std::error_code ec;
+            for (auto it = fs::directory_iterator(sd.dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+                if (it->path().extension() == ".part") Fail(__LINE__, "leftover .part", it->path().filename().string());
+                else if (fs::file_size(it->path()) != sd.wav.size()) Fail(__LINE__, "wrong final file", it->path().filename().string());
+            }
+            // Still healthy after all of it.
+            sd.cl.ClearCancel();
+            const StatusResult st = sd.cl.Status();
+            CHECK_ERR(st, Error::kOk);
+            CHECK(st.cache.files == sd.id);
+        }
+        for (Side& sd : sides) sd.srv->Stop();
     }
 
     struct TestEntry { const char* name; void (*fn)(); };
@@ -870,6 +1212,15 @@ int main() {
         { "audio_url_resolution", T_UrlResolution },
         { "config_validation", T_ConfigValidation },
         { "probe_audio_headers", T_Probe },
+        { "redirect_never_leaks_key", T_RedirectNeverLeaksKey },
+        { "non_utf8_fields_rejected", T_NonUtf8Rejected },
+        { "download_too_large", T_DownloadTooLarge },
+        { "download_body_longer_than_content_length", T_DownloadBodyLongerThanContentLength },
+        { "report_playing", T_ReportPlaying },
+        { "cancel_in_wait_phase", T_CancelInWaitPhase },
+        { "stop_token_in_wait_phase", T_StopTokenInWaitPhase },
+        { "cancel_racing_start", T_CancelRacingStart },
+        { "cancel_stress_two_clients", T_CancelStressTwoClients },
     };
     for (const auto& t : tests) {
         g_curName   = t.name;

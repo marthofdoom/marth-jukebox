@@ -30,6 +30,8 @@ get the page moderated.
 - Requests: `GET /api/game/status`, `PUT /api/game/profiles/*`, `POST /api/game/next`,
   `GET /api/game/audio/*`, `POST /api/game/playing`, and `GET /api/search` for the in-game picker.
 - Credentials: only the user's own personal key, sent as `X-Harmony-Key` to that URL.
+- Transport: `http://` sends the key in clear text; the mod page and README must recommend `https://` for any
+  server reached outside the LAN / Tailnet. Redirects are never followed, so the key never leaves that URL.
 - All of the above documented on the mod page and in `README.md`.
 
 ## Decisions (marth 2026-10-27)

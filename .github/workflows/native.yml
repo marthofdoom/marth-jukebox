@@ -64,6 +64,7 @@ jobs:
           path: |
             native/build/release/MarthJukebox.dll
             native/build/release/MarthJukebox.pdb
+            native/build/release/mj_net_tests.exe
           if-no-files-found: error
 
       # Network client tests: a console exe with an in-process 127.0.0.1 HTTP server. Never
