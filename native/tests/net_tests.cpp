@@ -325,7 +325,7 @@ namespace {
         const auto seen = s.Seen();
         CHECK(seen.size() == 1 && seen[0].method == "GET" && seen[0].target == "/api/game/status");
         CHECK(seen[0].headers.count("x-harmony-key") == 0);  // no key configured => no header
-        CHECK(seen[0].headers["user-agent"].find("MarthJukebox/") == 0);
+        CHECK(seen[0].headers.at("user-agent").find("MarthJukebox/") == 0);
     }
 
     void T_StatusNoContainers() {
@@ -368,7 +368,7 @@ namespace {
             CHECK(b.is_object() && b.value("profile", "") == "skyrim" && b.value("type", "") == "explore");
             CHECK(b.value("sources", "") == "library" && b.value("count", 0) == 2 && b.value("container", "") == "wav");
             CHECK(!b.contains("peek"));
-            CHECK(seen[0].headers["content-type"].find("application/json") == 0);
+            CHECK(seen[0].headers.at("content-type").find("application/json") == 0);
         }
         const NextResult p = cl.Next("skyrim", "explore", "", 1, true, "");
         CHECK_ERR(p, Error::kOk);
