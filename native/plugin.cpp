@@ -2,6 +2,7 @@
 // (retarget/, the only engine-memory writer) + the slot file test (slots/). No hooks.
 // See DESIGN.md and docs/M0B-TEST.md.
 #include "PCH.h"
+#include "menu/Menu.h"
 #include "probe/Probe.h"
 #include "retarget/Retarget.h"
 
@@ -33,6 +34,7 @@ namespace {
             spdlog::info("[startup] kDataLoaded");
             MJ::Probe::OnDataLoaded();      // identity maps + watcher
             MJ::Retarget::OnDataLoaded();   // needs the maps; no writes here
+            MJ::Menu::Register();           // settings page (the core calls MJ::Menu::SetStore once its store is loaded)
             break;
         case SKSE::MessagingInterface::kInputLoaded:
         case SKSE::MessagingInterface::kNewGame:

@@ -34,6 +34,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Pure-C++ core (environment map, settings, profile builder) and its tests.
 include(${CMAKE_CURRENT_SOURCE_DIR}/core.cmake)
+# Settings page (SKSE Menu Framework) + its view-model library and test target.
+include(${CMAKE_CURRENT_SOURCE_DIR}/menu/menu.cmake)
 # Network client: WinHTTP (system DLL, no extra dependency) + nlohmann_json for the Harmony replies.
 target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json winhttp)
 

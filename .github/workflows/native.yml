@@ -79,6 +79,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
         env:
           VCPKG_ROOT: C:\vcpkg
+      # Settings-page view-model tests (native/menu, built against StubApp.cpp, never the DLL).
+      - name: Menu tests
+        run: |
+          cmake --build build/release --target mj_menu_tests
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\build\release\mj_menu_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+        env:
+          VCPKG_ROOT: C:\vcpkg
       # Network client tests: a console exe with an in-process 127.0.0.1 HTTP server. Never
       # touches a real Harmony. A non-zero exit (any failed check) fails the job.
       - name: Run net tests
