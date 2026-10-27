@@ -108,3 +108,11 @@ Reviewer B, round 2 (e5bdb99), from its log:
   comment (disabled/invalid address)", "replay nowPlaying shows raw key": FIXED in the round-2 commit.
 
 Reviewer A's in-game checklist (round 2, 9 items) is docs/INTEGRATION-TEST.md "Reviewer checklist".
+
+## menu-page (settings page), Opus review of 3a17c22 + da76f61
+
+- **SEV-5** A literal `##` in a server-supplied title truncates the label of a suggestion row (ImGui id syntax).
+- **SEV-5** `SettingsStore::Update` may log (sanitize corrections) on the render thread.
+- **SEV-5** `s.queryText.erase` inside the suggestions loop is fragile (it relies on the loop ending right after the pick).
+- **SEV-5** The empty-text browse `SearchAsync` ("Show suggestions" with no text, genre list for presets) is a contract with
+  the core: it must return the library's genres/artists for an empty query.

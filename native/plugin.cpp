@@ -3,6 +3,7 @@
 // slot files) and app/ (connection test, search, peek). No hooks.
 #include "PCH.h"
 #include "app/AppHost.h"
+#include "menu/Menu.h"
 
 namespace {
 
@@ -31,6 +32,7 @@ namespace {
         case SKSE::MessagingInterface::kDataLoaded:
             spdlog::info("[startup] kDataLoaded");
             MJ::App::OnDataLoaded();
+            MJ::Menu::Register();           // settings page; the store is attached in SKSEPluginLoad, the page waits for the INI load
             break;
         case SKSE::MessagingInterface::kNewGame:
             MJ::App::OnGameLoaded("kNewGame");
@@ -55,6 +57,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
                  REL::Module::get().version().string());
 
     MJ::App::Init();  // settings store object only; the INI is read by the pool thread after kDataLoaded
+    MJ::Menu::SetStore(MJ::App::Store());  // the page treats Revision()==0 (INI not loaded yet) as 'not loaded', so it cannot save defaults over the user's INI
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
 
     spdlog::info("=== MarthJukebox loaded ===");
