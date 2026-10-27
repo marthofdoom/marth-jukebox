@@ -27,3 +27,10 @@
 - **SEV-5** (reviewer, verbatim): Ctx::Add logs raw other.<EDID>.
 - **SEV-5** (reviewer, verbatim): leak test not running other.<key> through BuildProfile.
 - **SEV-5** (reviewer, verbatim): comments-only INI flagged unusable and per-line warnings cleared.
+
+## core-settings closing review (a862ccb) — Opus, verbatim, all deferrable
+
+- SEV-4 `CopyDurable` no-overwrite is check-then-create (TOCTOU): uses `exists()` then `CREATE_ALWAYS`/`O_CREAT|O_TRUNC`. Fix: create-new flag in `WriteFileDurable` (`CREATE_NEW` / `O_CREAT|O_EXCL`), name loop moves to the next suffix on `ERROR_FILE_EXISTS`/`EEXIST`.
+- SEV-4 a failed copy leaves a partial file: `.bak` `CREATE_ALWAYS` truncates the previous good backup before the write can fail (INI itself stays intact; Save refuses). Fix: write `.bak` as tmp then replace, or delete the partial on failure.
+- SEV-5 misleading error text: copy failures say "temporary settings file".
+- SEV-4 docs disagree on Qobuz: docs/ENVIRONMENTS.md:277 ("`sources=all` (YouTube Music; never Qobuz)") vs ENVIRONMENTS.md:313 and DESIGN 8.8 (`all` includes Qobuz until Harmony accepts a source list) vs docs/NEXUS-COMPLIANCE.md:15 ("library ... plus Qobuz"). Fix in one docs commit; note Harmony game-pools now accepts a `sources` list and `game_excluded_services`, so streaming can be sent as `ytmusic` only.
