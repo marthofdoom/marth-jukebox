@@ -71,6 +71,7 @@ namespace mj::config
 		std::string cacheDir;                                  // empty = the caller's default directory
 		int         cacheCapMB = kCacheCapDefaultMB;
 		LogLevel    logLevel   = LogLevel::Info;
+		bool        allowQobuz = false;  // [General] AllowQobuz: INI only, never in the menu (DESIGN 8.8)
 		Features    features;
 	};
 
@@ -128,8 +129,22 @@ namespace mj::config
 	// The cache directory in effect: Settings.cacheDir if set, else `defaultDir`.
 	[[nodiscard]] std::filesystem::path EffectiveCacheDir(const Settings& s, const std::filesystem::path& defaultDir);
 
-	// Streaming flag -> Harmony `sources` request field.
+	// Streaming flag -> Harmony `sources` request field, assuming a server that accepts a service list and
+	// AllowQobuz off: "library" or "library,ytmusic". Use ChooseSources() for the real decision.
 	[[nodiscard]] std::string_view SourcesFor(const EnvironmentSetting& e);
+
+	// The `sources` value for one environment's `next` call (DESIGN 8.8, docs/NEXUS-COMPLIANCE.md).
+	//   streaming off                      -> "library"
+	//   streaming on, server takes a list  -> "library,ytmusic"  (+ ",qobuz" only with [General] AllowQobuz=1)
+	//   streaming on, server too old for a list (no `services` in /api/game/status): its only streaming value is
+	//     "all", which includes Qobuz when the server is signed in, so it is used only with AllowQobuz=1;
+	//     otherwise "library" and streamingDropped = true (never stream what the player did not consent to).
+	struct SourcesChoice
+	{
+		std::string sources;
+		bool        streamingDropped = false;  // the player asked for streaming but this server cannot honour it safely
+	};
+	[[nodiscard]] SourcesChoice ChooseSources(const Settings& s, const EnvironmentSetting& e, bool serverAcceptsList);
 
 	// ---- logging hook ------------------------------------------------------------------------------
 	// Everything this module logs goes through here. Default: spdlog's default logger. Tests install a

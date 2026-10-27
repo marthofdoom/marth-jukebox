@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""MarthJukebox.esp generator: an ESL-flagged plugin with two single-track music
-records (MUST), MJ_ExploreTundra_A / MJ_ExploreTundra_B.
+"""MarthJukebox.esp generator: an ESL-flagged plugin with K = 24 single-track music
+records (MUST), the slot wrappers MJ_SLOT_00 .. MJ_SLOT_23.
 
 Run:  python3 -I tools/make_esp.py [out.esp]      (default: assets/MarthJukebox.esp)
 
@@ -13,9 +13,9 @@ written here. After writing, the file is re-parsed with the same parser and its
 structure is diffed against the vanilla record (when Skyrim.esm is present).
 
 FormIDs: one master (Skyrim.esm) => own-file prefix 0x01; ESL range 0x800-0xFFF.
-  0x800 MJ_ExploreTundra_A -> Data\\Music\\Harmony\\explore_a.wav
-  0x801 MJ_ExploreTundra_B -> Data\\Music\\Harmony\\explore_b.wav
-The probe (native/probe/Probe.cpp) hard-codes these two local ids.
+  0x800 + NN  MJ_SLOT_NN -> Data\\Music\\Harmony\\slot_NN.wav   (NN = 00 .. 23)
+native/retarget/SlotAssign.h (kSlotCount, kFirstLocalId) hard-codes K and the first local id. The mod ships
+no audio: the slot files are written at runtime by the plugin (docs/INTEGRATION-1.0.md A.1/A.3).
 """
 
 import os
@@ -31,11 +31,9 @@ TRACK_SINGLE = 0x6ED7E048  # BSIMusicTrack::TrackType::kSingleTrack (CNAM)
 # (local id, editor id, ANAM path). The "Data\" prefix is what vanilla uses
 # (e.g. MUSExploreDay09 = "Data\Music\Explore\MUS_Explore_Day_09.wav"); 210 other
 # vanilla records use "\Data\Music\...". Both exist in Skyrim.esm.
-TRACKS = [
-    (0x800, "MJ_ExploreTundra_A", "Data\\Music\\Harmony\\explore_a.wav"),
-    (0x801, "MJ_ExploreTundra_B", "Data\\Music\\Harmony\\explore_b.wav"),
-]
-NEXT_OBJECT_ID = 0x802
+SLOTS = 24
+TRACKS = [(0x800 + n, "MJ_SLOT_%02d" % n, "Data\\Music\\Harmony\\slot_%02d.wav" % n) for n in range(SLOTS)]
+NEXT_OBJECT_ID = 0x800 + SLOTS
 
 
 def zstr(s):
@@ -60,7 +58,7 @@ def make_tes4(num_records):
     # flags 0x200 = ESL. Honest only while every local id is in 0x800-0xFFF.
     hedr = struct.pack("<fII", 1.70, num_records, NEXT_OBJECT_ID)
     body = (subrec("HEDR", hedr) + subrec("CNAM", zstr("marth"))
-            + subrec("SNAM", zstr("marth's Jukebox M0a probe records"))
+            + subrec("SNAM", zstr("marth's Jukebox slot wrappers (no audio shipped)"))
             + subrec("MAST", zstr("Skyrim.esm")) + subrec("DATA", struct.pack("<Q", 0)))
     return record("TES4", 0, 0x00000200, body)
 
@@ -73,7 +71,7 @@ def make_must(local_id, edid, path):
 
 def build():
     must = b"".join(make_must(*t) for t in TRACKS)
-    # numRecords counts records + groups after TES4: 2 MUST + 1 GRUP
+    # numRecords counts records + groups after TES4: K MUST + 1 GRUP
     return make_tes4(len(TRACKS) + 1) + group("MUST", must)
 
 

@@ -89,8 +89,50 @@ MJ_TEST(Settings_Defaults)
 	MJ_CHECK(e.mode == Mode::Vanilla && !e.allowStreaming && !e.rememberPlace && e.poolSize == 3);
 	MJ_CHECK(SourcesFor(e) == "library");
 	e.allowStreaming = true;
-	MJ_CHECK(SourcesFor(e) == "all");
+	MJ_CHECK(SourcesFor(e) == "library,ytmusic");
+	MJ_CHECK(!s.global.allowQobuz);
 	MJ_CHECK(EffectiveCacheDir(s, "D:/def") == fs::path("D:/def"));
+}
+
+// DESIGN 8.8: Qobuz only with [General] AllowQobuz=1; an old server (no service list) never streams without consent.
+MJ_TEST(Settings_ChooseSourcesAndAllowQobuz)
+{
+	Settings s = DefaultSettings();
+	EnvironmentSetting e;
+	// Streaming off: always the library, whatever the server or the Qobuz switch.
+	for (const bool list : { true, false }) {
+		for (const bool qobuz : { false, true }) {
+			s.global.allowQobuz = qobuz;
+			const auto c = ChooseSources(s, e, list);
+			MJ_CHECK(c.sources == "library" && !c.streamingDropped);
+		}
+	}
+	e.allowStreaming = true;
+	s.global.allowQobuz = false;
+	MJ_CHECK(ChooseSources(s, e, true).sources == "library,ytmusic");
+	MJ_CHECK(!ChooseSources(s, e, true).streamingDropped);
+	// Old server: "all" could include Qobuz, so without consent the environment stays on the library.
+	MJ_CHECK(ChooseSources(s, e, false).sources == "library");
+	MJ_CHECK(ChooseSources(s, e, false).streamingDropped);
+	s.global.allowQobuz = true;
+	MJ_CHECK(ChooseSources(s, e, true).sources == "library,ytmusic,qobuz");
+	MJ_CHECK(ChooseSources(s, e, false).sources == "all");
+	MJ_CHECK(!ChooseSources(s, e, false).streamingDropped);
+
+	// INI: default 0 is written, 1 round-trips, garbage keeps the value with a diagnostic, any case of the key.
+	Settings d = DefaultSettings();
+	const std::string text = SerializeIni(d);
+	MJ_CHECK(text.find("AllowQobuz=0") != std::string::npos);
+	Diagnostics diag;
+	Settings r = ParseIni("[General]\nallowqobuz = yes\n", diag);
+	MJ_CHECK(r.global.allowQobuz && diag.empty());
+	MJ_CHECK(SerializeIni(r).find("AllowQobuz=1") != std::string::npos);
+	diag.clear();
+	r = ParseIni("[General]\nAllowQobuz=maybe\n", diag);
+	MJ_CHECK(!r.global.allowQobuz && diag.size() == 1);
+	diag.clear();
+	r = ParseIni(SerializeIni(r), diag);
+	MJ_CHECK(!r.global.allowQobuz && diag.empty());
 }
 
 MJ_TEST(Settings_IniRoundTrip)
@@ -104,6 +146,7 @@ MJ_TEST(Settings_IniRoundTrip)
 	s.global.logLevel = LogLevel::Debug;
 	s.global.features.flac = false;
 	s.global.features.network = false;
+	s.global.allowQobuz = true;
 	auto& ex = s.environments["explore"];
 	ex.mode = Mode::Genre;
 	ex.selector = "Ambient; chill = good";
@@ -136,6 +179,7 @@ MJ_TEST(Settings_IniRoundTrip)
 	MJ_CHECK(r.global.cacheDir == s.global.cacheDir);
 	MJ_CHECK(r.global.cacheCapMB == 8192 && r.global.logLevel == LogLevel::Debug);
 	MJ_CHECK(!r.global.features.flac && !r.global.features.network && r.global.features.retarget);
+	MJ_CHECK(r.global.allowQobuz);
 	MJ_CHECK(r.environments.size() == s.environments.size());
 	for (const auto& [id, e] : s.environments) {
 		const auto* g = r.Find(id);
