@@ -42,7 +42,9 @@ modlist (Requiem, LoreRim...). Instead the plugin edits the winning in-memory MU
    enabled type, in its own cache dir (not the engine's). When a type's music event fires, one of the
    3 is picked at random (local shuffle), renamed into the idle engine slot (same filesystem, so cheap),
    and played; a worker then asks `next` for a replacement and downloads it in the background, so the pool
-   is back to 3 new-ish tracks for the next event. Pools are prefilled at game load, enabled types only
+   is back to 3 for the next event. Only the played track is replaced: a track that never played stays
+   in the pool (marth 2026-10-27), also across game sessions, so the pool is persisted on disk and
+   revalidated at load (file present, size matches the recorded Content-Length). Pools are prefilled at game load, enabled types only
    (combat first: it gives no warning). **`normalize=1` is always on (marth)**; the 29 s cold cost is
    hidden by the pool, since downloads never block playback.
    Detection is a read-only poll (SKSE task, ~250 ms) of `BSMusicManager::current` +
