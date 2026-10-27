@@ -230,9 +230,11 @@ namespace MJ::Net {
             return static_cast<std::size_t>(a_in.gcount()) == a_n;
         }
 
-        // Extra time the worker waits beyond WinHTTP's own timeout for an async op before it gives up
-        // on WinHTTP and abandons the request itself (kTimeout, logged loudly). Backstop only.
-        constexpr DWORD kWatchdogGraceMs = 5000;
+        // The worker enforces the configured timeouts itself: it waits for an async op at most
+        // WinHTTP's own timeout + this grace, then abandons the request (kTimeout, logged). On Windows
+        // WinHTTP's timeout fires first; under Wine 10 the async receive timeout was observed NOT to
+        // fire at all (mj_net_tests receive_timeout, 2026-10-27), so there this is the timeout.
+        constexpr DWORD kWatchdogGraceMs = 500;
 
         // Per-request state shared with the WinHTTP async callback (WinHTTP runs in async mode).
         // Heap-allocated, reference counted: one reference for the worker (dropped when it closes
@@ -532,10 +534,10 @@ namespace MJ::Net {
                 return Error::kCancelled;
             }
             if (w == WAIT_TIMEOUT) {
-                spdlog::warn("[net] WinHTTP did not complete an operation within {} ms although its own timeout should have "
-                             "fired; abandoning the request",
+                spdlog::warn("[net] WinHTTP did not complete an operation within {} ms and its own timeout did not fire "
+                             "(expected under Wine); client enforced the timeout, abandoning the request",
                              static_cast<unsigned long>(a_budgetMs));
-                a_msg = "timed out (WinHTTP did not complete; client watchdog)";
+                a_msg = "timed out (enforced by the client; WinHTTP's timeout did not fire)";
                 return Error::kTimeout;
             }
             a_msg = std::format("wait failed (error {})", static_cast<unsigned long>(::GetLastError()));

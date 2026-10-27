@@ -13,7 +13,8 @@ Note: the `core-settings` branch also edits this file; merge both sections.
 
 - **SEV-3** Cancel/stop on Wine unverified - upload mj_net_tests.exe as CI artifact and run under Proton.
   (The fix round moved WinHTTP to async mode so a cancel no longer depends on Wine unblocking a socket,
-  and CI now uploads `mj_net_tests.exe` beside the DLL; the Proton run itself is still open.)
+  and CI now uploads `mj_net_tests.exe` beside the DLL. A local Wine 10 run passes all cancel tests and
+  showed Wine's async receive timeout never fires, now enforced by the client. Proton itself is still open.)
 - **SEV-4** Test gaps: the tests only run on Windows (CI); no Wine/Proton run of `mj_net_tests` yet.
 - **SEV-5** `target.find("wait=")` also matches `await=` (a caller URL with `await=` would get no `wait=`).
 - **SEV-5** `JInt` casts a JSON double to int64 with no range check (UB for huge or NaN-like values).

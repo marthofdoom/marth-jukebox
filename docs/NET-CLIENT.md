@@ -24,8 +24,12 @@ nlohmann-json for replies, spdlog for logging. No engine or CommonLib calls.
   abandoned operation may still touch (read buffer, request body, header block, completion event) lives in a
   reference-counted per-request context that is freed only on `WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING`, so
   a late completion never writes into freed memory, and the worker never waits for it.
-* Backstop: each wait has a budget of WinHTTP's own timeout + 5 s. If WinHTTP's timeout never fires the
-  worker abandons the request with `kTimeout` and a loud `[net]` warning (a failure surfaced, not hidden).
+* Timeouts are enforced by the worker too: each wait has a budget of WinHTTP's own timeout + 0.5 s, after
+  which the worker abandons the request with `kTimeout` and a `[net]` warning. On Windows WinHTTP's timeout
+  fires first. Under Wine 10 the async receive timeout was observed **not** to fire (the CI-built
+  `mj_net_tests.exe`, `receive_timeout`), so there the worker's budget is what bounds a stalled server.
+* Wine 10 (local run of the CI exe, 2026-10-27): all cancel tests pass (wait phase, mid-body, racing start,
+  two-client stress). Proton itself is still to be run.
 * Nothing throws across the API; every call returns a struct derived from `Result`
   (`error`, `httpStatus`, `code`, `message`, `retryAfterS`).
 

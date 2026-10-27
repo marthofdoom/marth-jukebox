@@ -309,6 +309,12 @@ namespace {
         if (!r.Ok()) Fail(__LINE__, "Configure(" + a_cfg.baseUrl + ")", r.message);
     }
 
+    // Busy-wait (Windows sleep_for has >= 1 ms granularity, far too coarse to hit a request start).
+    void SpinUs(int a_us) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::microseconds(a_us);
+        while (std::chrono::steady_clock::now() < end) {}
+    }
+
     long long MsSince(std::chrono::steady_clock::time_point t) {
         return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t).count();
     }
@@ -1043,7 +1049,7 @@ namespace {
             std::stop_source ss;
             StatusResult     r;
             std::thread      t([&] { r = cl.Status(useStop ? ss.get_token() : std::stop_token{}); });
-            if (delayUs > 0) std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+            SpinUs(delayUs);
             const auto t0 = std::chrono::steady_clock::now();
             if (useStop) ss.request_stop();
             else cl.Cancel();
@@ -1061,6 +1067,7 @@ namespace {
             if (g_curFailed) break;
         }
         std::printf("    (%d ok, %d cancelled)\n", ok, cancelled);
+        CHECK(cancelled > 0);  // the window around the call start was actually hit
         cl.ClearCancel();
         CHECK_ERR(cl.Status(), Error::kOk);
     }
@@ -1127,7 +1134,7 @@ namespace {
                         if (st.Ok()) dataOk = st.cache.files == sd.id;
                     }
                 });
-                std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+                SpinUs(delayUs);
                 const auto t0 = std::chrono::steady_clock::now();
                 if (useStop) ss.request_stop();
                 else sd.cl.Cancel();
