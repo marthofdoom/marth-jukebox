@@ -239,6 +239,7 @@ namespace MJ::Retarget {
             }
             Slots::PublishPlay(true, handle, idx);
             if (g_haveLastPlay && handle == g_lastHandle && idx == g_lastIdx) return;
+            const auto t0  = std::chrono::steady_clock::now();
             g_haveLastPlay = true;
             g_lastHandle   = handle;
             g_lastIdx      = idx;
@@ -247,6 +248,8 @@ namespace MJ::Retarget {
                          StatusName(g_wrapper[0]->track->trackStatus.underlying()), Probe::NowMs());
             Probe::LogTrackHistory(g_target, std::format("play #{}", g_playN).c_str());
             Slots::RequestPlayExperiment(g_playN, handle, idx);
+            spdlog::info("[slots] play #{} handled on main thread in {} us", g_playN,
+                         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
         }
 
         // Main thread. Our two inner tracks' status (+ idle-since, settle time) -> worker

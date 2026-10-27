@@ -314,8 +314,12 @@ namespace MJ::Probe {
                          StatusName(a_s.typeStatus));
         }
 
+        // M0c stall detector: NowMs() of the previous watcher task (-1 before the first).
+        long long g_prevTickMs{ -1 };
+
         // Runs on the game main thread (SKSE task). Read-only.
         void Tick() {
+            const long long tickMs = NowMs();  // the stall detector's only per-tick cost (+ one subtraction below)
             State s;
             if (auto* mgr = RE::BSMusicManager::GetSingleton()) {
                 s.haveMgr = true;
@@ -337,6 +341,13 @@ namespace MJ::Probe {
                     }
                 }
             }
+            // Gap between two consecutive watcher tasks (nominally 250 ms). Logged only when
+            // > 1000 ms: the main thread did not run SKSE tasks for that long.
+            if (g_prevTickMs >= 0 && tickMs - g_prevTickMs > 1000) {
+                spdlog::info("[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}",
+                             tickMs - g_prevTickMs, g_prevTickMs, tickMs, TypeName(s.current), s.index, StatusName(s.typeStatus));
+            }
+            g_prevTickMs = tickMs;
             LogPosition(s);
             LogNowPlaying(s);
             if (g_havePrev && s == g_prev) return;

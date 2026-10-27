@@ -122,4 +122,19 @@ Compare `h0` (and its wrapper) from play #n with the `idx` of play #n+1 and with
 or before, is part of what the data must show.
 
 **Crash / stutter:** compare your noted times with the `play #n` and `rename` lines; each step logs its
-elapsed ms.
+elapsed ms. Two lines help:
+
+- `[slots] play #n handled on main thread in <us> us`: the time the plugin spent on the game's main thread
+  for that play event (detecting it, logging, and queueing the file work). The file work itself runs on
+  the plugin's own thread.
+- `[stall] main-thread tick gap <N> ms (previous tick at +<t>ms, this at +<t>ms) current=... idx=...
+  status=...`: written only when the plugin's 250 ms check was held up for more than 1 s. That means the
+  game's main thread was blocked for that long; nothing is logged when it was not. Loading screens also
+  produce these lines, which is normal.
+
+**If you notice a stutter:**
+
+- A `[stall]` line at the same time means the main thread was blocked. The lines around it show what else
+  was happening.
+- No `[stall]` line means the main thread was not blocked, so it was not our thread. The other mods' logs
+  for that moment are the place to look.
