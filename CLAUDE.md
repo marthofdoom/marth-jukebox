@@ -76,6 +76,15 @@ new mechanism = new file in its subsystem. ~1500 lines = plan a split (its own b
 
 ## Release (family pattern)
 
+**Distribution is GitHub-only (marth 2026-10-27)**; Nexus is held until Harmony has Spotify. A GitHub
+release (tag + published, not draft) ships with a README that has FULL instructions: requirements
+(Harmony server, SKSE, Address Library, the menu framework), install, first-run setup (server URL, key),
+the per-environment settings incl. the streaming checkbox, the cache folder and its size cap, known
+limits, uninstall, and the log file location. Update the README in the same release that adds or changes
+a user-facing feature; a release without current instructions is not done. Pre-release milestones (M0..)
+stay documented in docs/ only. GitHub has no Nexus-style rules, but docs/NEXUS-COMPLIANCE.md stays
+current so a later Nexus upload is a small step.
+
 One milestone per build, in-game tested before the next is written. A release request means tag + publish
 (not draft) + the Nexus text; the docs and the Nexus kit (`assets/nexus-description.bbcode`, banner,
 packaged README) are standing scope. The Nexus upload itself stays a manual browser step for marth.

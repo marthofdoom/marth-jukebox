@@ -35,7 +35,7 @@ get the page moderated.
 ## Decisions (marth 2026-10-27)
 
 - Default `sources` is **library only**. Streaming is a per-environment checkbox in the SKSE menu, off by default.
-- The mod stays **unreleased on Nexus** until Spotify support exists in Harmony. Re-read this doc and the
+- Distribution is **GitHub-only** for now (marth). The mod stays **unreleased on Nexus** until Spotify support exists in Harmony. Re-read this doc and the
   Nexus guidelines at release time; the Spotify route (no official audio API) raises the same
   copyright question as YouTube and must be assessed before any page goes up.
 - Advice recorded: if streaming is used, prefer a signed-out Harmony YouTube session or a throwaway
