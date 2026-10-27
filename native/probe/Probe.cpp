@@ -1,7 +1,8 @@
-// M0a read-only music probe. See Probe.h. Nothing here writes engine memory, takes
-// an engine lock, or installs a hook. Everything is logged at info with "[probe]".
-// M0b: the watcher task also runs Retarget::Tick (the only engine writer, in its own
-// file) after the probe's read-only Tick.
+// Read-only music probe. See Probe.h. Nothing here writes engine memory, takes an engine lock, or installs a
+// hook. The enumeration and the music-state lines are at debug level ("[probe]"); the totals are at info.
+// The watcher task also runs Retarget::Tick (the only engine writer, in its own file) after the probe's
+// read-only Tick. The stall detector logs main-thread gaps > 400 ms at debug (the game's ~5 min autosaves,
+// M0c) and gaps > 5 s at warn.
 #include "PCH.h"
 #include "probe/Probe.h"
 #include "retarget/Retarget.h"
@@ -10,16 +11,6 @@ namespace MJ::Probe {
 
     namespace {
 
-        // Our two records (tools/make_esp.py: local ids 0x800 / 0x801, ESL range).
-        constexpr std::string_view kPluginName   = "MarthJukebox.esp"sv;
-        constexpr RE::FormID       kLocalIdA     = 0x800;
-        constexpr RE::FormID       kLocalIdB     = 0x801;
-        constexpr std::string_view kEdidA        = "MJ_ExploreTundra_A"sv;
-        constexpr std::string_view kEdidB        = "MJ_ExploreTundra_B"sv;
-        // Vanilla single-track MUST records with the two ANAM spellings that exist in
-        // Skyrim.esm: "Data\Music\Explore\..." (0xDCF) and "\Data\Music\Explore\..." (0xEF540).
-        constexpr RE::FormID       kVanillaPlain = 0x00000DCF;
-        constexpr RE::FormID       kVanillaSlash = 0x000EF540;
 
         // ms since the DLL was loaded (static init runs at LoadLibrary). NowMs() is public (Probe.h).
         const auto g_t0 = std::chrono::steady_clock::now();
@@ -100,18 +91,18 @@ namespace MJ::Probe {
         void LogInnerTrack(const char* a_indent, RE::BGSMusicTrack* a_inner, bool& a_isSingle) {
             a_isSingle = false;
             if (!a_inner) {
-                spdlog::info("[probe] {}inner track = null", a_indent);
+                spdlog::debug("[probe] {}inner track = null", a_indent);
                 return;
             }
             const auto t = static_cast<std::uint32_t>(a_inner->GetType());
-            spdlog::info("[probe] {}inner track {:p} type=0x{:08X}({}) status={}", a_indent,
+            spdlog::debug("[probe] {}inner track {:p} type=0x{:08X}({}) status={}", a_indent,
                          static_cast<const void*>(a_inner), t, TrackTypeName(t), StatusName(a_inner->trackStatus.underlying()));
             if (a_inner->GetType() == RE::BSIMusicTrack::TrackType::kSingleTrack) {
                 a_isSingle    = true;
                 const auto* s = static_cast<RE::BGSMusicSingleTrack*>(a_inner);
-                spdlog::info("[probe] {}  trackID  {}", a_indent, IdStr(s->trackID));
-                spdlog::info("[probe] {}  finaleID {}", a_indent, IdStr(s->finaleID));
-                spdlog::info("[probe] {}  cuePoints={} loopData={}", a_indent, s->cuePoints.size(),
+                spdlog::debug("[probe] {}  trackID  {}", a_indent, IdStr(s->trackID));
+                spdlog::debug("[probe] {}  finaleID {}", a_indent, IdStr(s->finaleID));
+                spdlog::debug("[probe] {}  cuePoints={} loopData={}", a_indent, s->cuePoints.size(),
                              s->loopData ? std::format("present(begin={} end={} count={})", s->loopData->loopBegin,
                                                        s->loopData->loopEnd, s->loopData->loopCount)
                                          : std::string("none"));
@@ -134,7 +125,7 @@ namespace MJ::Probe {
                 RE::BSIMusicType* iface = static_cast<RE::BSIMusicType*>(mt);
                 g_typeByIface[iface]    = mt;
 
-                spdlog::info("[probe] MUSC {:08X} [{}] edid=\"{}\" flags=0x{:X}({}) priority={} fadeTime={:.3f} ducksOtherMusicBy={} "
+                spdlog::debug("[probe] MUSC {:08X} [{}] edid=\"{}\" flags=0x{:X}({}) priority={} fadeTime={:.3f} ducksOtherMusicBy={} "
                              "currentTrackIndex={} typeStatus={} tracks={} (BSIMusicType* {:p})",
                              mt->GetFormID(), PluginOf(mt), EdidOf(mt), iface->flags.underlying(), MstFlags(iface->flags.underlying()),
                              iface->priority, iface->fadeTime, iface->ducksOtherMusicBy, iface->currentTrackIndex,
@@ -144,7 +135,7 @@ namespace MJ::Probe {
                     RE::BSIMusicTrack* tr = iface->tracks[i];
                     ++a_t.tracks;
                     if (!tr) {
-                        spdlog::info("[probe]   track[{}] = null", i);
+                        spdlog::debug("[probe]   track[{}] = null", i);
                         continue;
                     }
                     // BSIMusicTrack* -> wrapper. Resolved by identity (primary), cross-checked
@@ -162,17 +153,17 @@ namespace MJ::Probe {
                     }
                     if (!w) {
                         ++a_t.nonWrapper;
-                        spdlog::info("[probe]   track[{}] {:p} is NOT a known MUST wrapper", i, static_cast<const void*>(tr));
+                        spdlog::debug("[probe]   track[{}] {:p} is NOT a known MUST wrapper", i, static_cast<const void*>(tr));
                         continue;
                     }
                     ++a_t.wrappers;
-                    spdlog::info("[probe]   track[{}] wrapper {:08X} [{}] edid=\"{}\" (wrapper {:p}, iface offset {}) wrapperStatus={}", i,
+                    spdlog::debug("[probe]   track[{}] wrapper {:08X} [{}] edid=\"{}\" (wrapper {:p}, iface offset {}) wrapperStatus={}", i,
                                  w->GetFormID(), PluginOf(w), EdidOf(w), static_cast<const void*>(w),
                                  reinterpret_cast<const char*>(tr) - reinterpret_cast<const char*>(w),
                                  StatusName(tr->trackStatus.underlying()));
                     if (!w->track) {
                         ++a_t.nullInner;
-                        spdlog::info("[probe]   track[{}] wrapper has NO inner track; skipped", i);
+                        spdlog::debug("[probe]   track[{}] wrapper has NO inner track; skipped", i);
                         continue;
                     }
                     bool single = false;
@@ -187,40 +178,6 @@ namespace MJ::Probe {
             }
         }
 
-        void LogOneMust(const char* a_label, RE::BGSMusicTrackFormWrapper* a_w) {
-            if (!a_w) {
-                spdlog::info("[probe] {}: not found", a_label);
-                return;
-            }
-            spdlog::info("[probe] {}: wrapper {:08X} [{}] edid=\"{}\" formType={}", a_label, a_w->GetFormID(), PluginOf(a_w),
-                         EdidOf(a_w), static_cast<int>(a_w->GetFormType()));
-            bool single = false;
-            LogInnerTrack("  ", a_w->track, single);
-        }
-
-        void LookupOurs(RE::TESDataHandler* a_dh) {
-            spdlog::info("[probe] ---- our records ({}) ----", kPluginName);
-            const auto* file = a_dh->LookupModByName(kPluginName);
-            if (!file) {
-                spdlog::info("[probe] {} is NOT in the load order (ESP not installed or not enabled); skipping our-record checks", kPluginName);
-            } else {
-                spdlog::info("[probe] {} present: compileIndex=0x{:02X} smallFileCompileIndex=0x{:03X} light={}", kPluginName,
-                             file->GetCompileIndex(), file->GetSmallFileCompileIndex(), file->IsLight());
-                const RE::FormID idA = a_dh->LookupFormID(kLocalIdA, kPluginName);
-                const RE::FormID idB = a_dh->LookupFormID(kLocalIdB, kPluginName);
-                spdlog::info("[probe] LookupFormID local 0x{:03X} -> {:08X}, local 0x{:03X} -> {:08X}", kLocalIdA, idA, kLocalIdB, idB);
-                LogOneMust("ours A", a_dh->LookupForm<RE::BGSMusicTrackFormWrapper>(kLocalIdA, kPluginName));
-                LogOneMust("ours B", a_dh->LookupForm<RE::BGSMusicTrackFormWrapper>(kLocalIdB, kPluginName));
-                spdlog::info("[probe] LookupByEditorID(\"{}\") -> {:p}, (\"{}\") -> {:p}", kEdidA,
-                             static_cast<const void*>(RE::TESForm::LookupByEditorID(kEdidA)), kEdidB,
-                             static_cast<const void*>(RE::TESForm::LookupByEditorID(kEdidB)));
-            }
-            // Vanilla references for the hashed-path comparison (works with or without our ESP).
-            spdlog::info("[probe] vanilla reference: ANAM \"Data\\Music\\Explore\\MUS_Explore_Day_09.wav\" (0x{:08X})", kVanillaPlain);
-            LogOneMust("vanilla plain", RE::TESForm::LookupByID<RE::BGSMusicTrackFormWrapper>(kVanillaPlain));
-            spdlog::info("[probe] vanilla reference: ANAM \"\\Data\\Music\\Explore\\MUS_Explore_Morning_02.wav\" (0x{:08X})", kVanillaSlash);
-            LogOneMust("vanilla slash", RE::TESForm::LookupByID<RE::BGSMusicTrackFormWrapper>(kVanillaSlash));
-        }
 
         // ---------------------------------------------------------------- watcher
 
@@ -240,59 +197,12 @@ namespace MJ::Probe {
         State g_prev;
         bool  g_havePrev{ false };
 
-        // ---- M0b additions (read-only) ----
-
-        // "A" / "B" for our two slot wrappers, "vanilla(FORMID)" for any other MUST wrapper.
+        // "slot NN" for our slot wrappers, "vanilla(FORMID)" for any other MUST wrapper.
         std::string WrapperLabel(const RE::BSIMusicTrack* a_t) {
             if (!a_t) return "none";
-            switch (Retarget::SlotOf(a_t)) {
-            case 0: return "A";
-            case 1: return "B";
-            default: break;
-            }
+            if (const int s = Retarget::SlotOf(a_t); s >= 0) return std::format("slot {:02}", s);
             if (const auto* w = WrapperOf(a_t)) return std::format("vanilla({:08X})", w->GetFormID());
             return std::format("<unknown {:p}>", static_cast<const void*>(a_t));
-        }
-
-        std::string HandleStr(const RE::BSSoundHandle& a_h) {
-            // Raw fields only. BSSoundHandle::IsPlaying/IsValid are engine calls through
-            // relocations not checked against the binary for this purpose; not used.
-            return std::format("[soundID=0x{:08X} assumeSuccess={} state={}]", a_h.soundID, a_h.assumeSuccess,
-                               a_h.state.underlying());
-        }
-
-        // Every >=1000 ms while MUSExploreTundra is current or one of our wrappers is the
-        // current track: the inner single track's playback fields (DESIGN.md (main) section 8.1).
-        long long g_lastPosMs{ -1000000 };
-
-        void LogPosition(const State& a_s) {
-            if (!a_s.current) return;
-            const bool ours = Retarget::SlotOf(a_s.track) >= 0;
-            if (a_s.current != Retarget::Target() && !ours) return;
-            const auto now = NowMs();
-            if (now - g_lastPosMs < 1000) return;
-            g_lastPosMs = now;
-
-            auto* w     = a_s.track ? WrapperOf(a_s.track) : nullptr;
-            auto* inner = w ? w->track : nullptr;
-            const auto head = std::format("[probe] pos t=+{}ms type={} typeStatus={} trackIndex={}/{} wrapper={}", now,
-                                          TypeName(a_s.current), StatusName(a_s.typeStatus), a_s.index, a_s.ntracks,
-                                          WrapperLabel(a_s.track));
-            if (!inner) {
-                spdlog::info("{} (no inner track)", head);
-                return;
-            }
-            const auto t = static_cast<std::uint32_t>(inner->GetType());
-            if (inner->GetType() != RE::BSIMusicTrack::TrackType::kSingleTrack) {
-                spdlog::info("{} inner={} trackStatus={} (no position fields)", head, TrackTypeName(t),
-                             StatusName(inner->trackStatus.underlying()));
-                return;
-            }
-            const auto* st = static_cast<const RE::BGSMusicSingleTrack*>(inner);
-            spdlog::info("{} inner=Single trackStatus={} lastKnownPlaybackPosition={} nextCuePoint={} loopsRemaining={} "
-                         "trackHandle{} finaleHandle{}",
-                         head, StatusName(st->trackStatus.underlying()), st->lastKnownPlaybackPosition, st->nextCuePoint,
-                         st->loopsRemaining, HandleStr(st->trackHandle), HandleStr(st->finaleHandle));
         }
 
         // On every change of (current type, trackIndex, track pointer): which wrapper plays.
@@ -309,7 +219,7 @@ namespace MJ::Probe {
             std::string inner = "?";
             if (const auto* w = WrapperOf(a_s.track); w && w->track)
                 inner = TrackTypeName(static_cast<std::uint32_t>(w->track->GetType()));
-            spdlog::info("[probe] now-playing t=+{}ms type={} trackIndex={}/{} wrapper={} inner={} typeStatus={}", NowMs(),
+            spdlog::debug("[probe] now-playing t=+{}ms type={} trackIndex={}/{} wrapper={} inner={} typeStatus={}", NowMs(),
                          TypeName(a_s.current), a_s.index, a_s.ntracks, WrapperLabel(a_s.track), inner,
                          StatusName(a_s.typeStatus));
         }
@@ -344,11 +254,10 @@ namespace MJ::Probe {
             // Gap between two consecutive watcher tasks (nominally 250 ms). Logged only when
             // > 400 ms: the main thread did not run SKSE tasks for that long.
             if (g_prevTickMs >= 0 && tickMs - g_prevTickMs > 400) {
-                spdlog::info("[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}",
+                spdlog::log(tickMs - g_prevTickMs > 5000 ? spdlog::level::warn : spdlog::level::debug, "[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}",
                              tickMs - g_prevTickMs, g_prevTickMs, tickMs, TypeName(s.current), s.index, StatusName(s.typeStatus));
             }
             g_prevTickMs = tickMs;
-            LogPosition(s);
             LogNowPlaying(s);
             if (g_havePrev && s == g_prev) return;
             g_prev     = s;
@@ -363,7 +272,7 @@ namespace MJ::Probe {
                 else
                     wrapper = std::format("<unknown {:p}>", static_cast<const void*>(s.track));
             }
-            spdlog::info("[probe] t=+{}ms music: mgr={} current={} typeStatus={} trackIndex={}/{} trackStatus={} wrapperStatus={} wrapper={} queue=[{}]",
+            spdlog::debug("[probe] t=+{}ms music: mgr={} current={} typeStatus={} trackIndex={}/{} trackStatus={} wrapperStatus={} wrapper={} queue=[{}]",
                          NowMs(), s.haveMgr ? "yes" : "NULL", TypeName(s.current), StatusName(s.typeStatus), s.index, s.ntracks,
                          StatusName(s.trackStatus), StatusName(s.wrapperStatus), wrapper, q);
         }
@@ -400,7 +309,7 @@ namespace MJ::Probe {
                     tasks->AddTask([] {
                         if (g_alive) {
                             Tick();             // read-only probe
-                            Retarget::Tick();   // M0b: the only engine-memory writer (guarded, see Retarget.cpp)
+                            Retarget::Tick();   // the only engine-memory writer (guarded, see Retarget.cpp)
                         }
                         g_taskPending = false;
                     });
@@ -425,7 +334,7 @@ namespace MJ::Probe {
 
     void LogTrackHistory(const RE::BSIMusicType* a_type, const char* a_tag) {
         if (!a_type || !g_typeByIface.contains(a_type)) {
-            spdlog::info("[probe] trackHistory ({}): type {} not enumerated; not read", a_tag, TypeName(a_type));
+            spdlog::debug("[probe] trackHistory ({}): type {} not enumerated; not read", a_tag, TypeName(a_type));
             return;
         }
         const auto&         hist   = a_type->trackHistory;
@@ -444,7 +353,7 @@ namespace MJ::Probe {
                     std::string inner = "?";
                     if (w->track) inner = TrackTypeName(static_cast<std::uint32_t>(w->track->GetType()));
                     const int slot = Retarget::SlotOf(t);
-                    first = std::format("tracks[{}]={} ({:08X}, inner {})", h0, slot == 0 ? "A" : slot == 1 ? "B" : "vanilla",
+                    first = std::format("tracks[{}]={} ({:08X}, inner {})", h0, slot >= 0 ? std::format("slot {:02}", slot) : std::string("vanilla"),
                                         w->GetFormID(), inner);
                 } else {
                     first = std::format("tracks[{}]=<unknown {:p}>", h0, static_cast<const void*>(t));
@@ -453,7 +362,7 @@ namespace MJ::Probe {
                 first = std::format("trackHistory[0]={} OUT OF RANGE (tracks={})", h0, tracks.size());
             }
         }
-        spdlog::info("[probe] trackHistory ({}): type={} currentTrackIndex={} tracks={} history size={} first=[{}] head: {}", a_tag,
+        spdlog::debug("[probe] trackHistory ({}): type={} currentTrackIndex={} tracks={} history size={} first=[{}] head: {}", a_tag,
                      TypeName(a_type), a_type->currentTrackIndex, tracks.size(), hn, vals, first);
     }
 
@@ -464,7 +373,7 @@ namespace MJ::Probe {
     }
 
     void OnDataLoaded() {
-        spdlog::info("[probe] ===== M0a probe start: game {} =====", REL::Module::get().version().string());
+        spdlog::info("[probe] ===== music probe start: game {} =====", REL::Module::get().version().string());
 
         auto* dh = RE::TESDataHandler::GetSingleton();
         if (!dh) {
@@ -484,15 +393,14 @@ namespace MJ::Probe {
                          "castMismatch={}",
                          t.types, t.tracks, t.wrappers, t.nonWrapper, t.single, t.palette, t.silent, t.other, t.nullInner, t.castMismatch);
 
-            LookupOurs(dh);
         }
 
         if (!g_watcher.th.joinable()) {
             g_alive         = true;
             g_watcher.th    = std::jthread(WatchLoop);
-            spdlog::info("[probe] watcher started (250 ms; probe read-only, logs on change only; runs the retarget tick after it)");
+            spdlog::info("[probe] watcher started (250 ms; probe read-only; runs the retarget tick after it)");
         }
-        spdlog::info("[probe] ===== M0a probe enumeration done =====");
+        spdlog::info("[probe] ===== music probe enumeration done =====");
     }
 
 }  // namespace MJ::Probe

@@ -1,28 +1,31 @@
 #pragma once
 
-// M0b retarget spike (hardcoded): MUSExploreTundra's Single/Palette track entries are
-// replaced IN PLACE by our two slot wrappers (MarthJukebox.esp 0x800 = A, 0x801 = B).
-// Silent entries, other entries and the array size are never touched. Writes happen
-// only in Tick(), on the main thread, while the type is neither current nor queued
-// and its typeStatus is Inactive or Finished.
-// Kill switch: Data/SKSE/Plugins/MarthJukebox.noretarget. See DESIGN.md (main) section 8.6.
+#include <cstdint>
+#include <vector>
+
+#include "retarget/SlotAssign.h"
+
+// The ONLY engine-memory writer of the plugin (docs/INTEGRATION-1.0.md A.1/A.3). Game thread only.
+//
+// Every music type the published Plan (pool/Pool.h) maps to slot s gets its Single/Palette entries pointed, in
+// place, at wrapper MJ_SLOT_s (array size never changed, Silent and other entries kept), and back to the
+// saved originals when the slot is not ready, the plan changes, or a kill switch trips. Writes happen only in
+// Tick(), while the type is neither current nor queued and its status is Inactive/Finished (M0b rule).
+// Play events (sound handle / index change of a slot wrapper while its type is current) are posted to the slot
+// thread. Diegetic and unmapped types are never touched.
 namespace MJ::Retarget {
 
-    // Main thread, at kDataLoaded, AFTER Probe::OnDataLoaded (needs its identity map).
-    // Resolves the target type and our wrappers, logs, starts the slot worker. No writes.
+    // kDataLoaded, after Probe::OnDataLoaded: resolves MarthJukebox.esp's 24 slot wrappers. No writes.
     void OnDataLoaded();
 
-    // Main thread, from the SKSE message listener: logs the target's tracks.size()
-    // for kInputLoaded / kNewGame / kPostLoadGame. No writes.
-    void OnMessage(std::uint32_t a_type);
-
-    // Main thread, from the 250 ms watcher task. The ONLY place engine memory is written.
+    // Watcher task (250 ms). The first call builds the music-type catalogue (the arrays are final by then, M0b)
+    // and hands it to the pool thread.
     void Tick();
 
-    // Main thread only. 0 = slot A wrapper, 1 = slot B wrapper, -1 = anything else.
+    // Game thread. Slot index 0..23 of one of our wrappers, else -1.
     int SlotOf(const RE::BSIMusicTrack* a_track);
 
-    // Main thread only. MUSExploreTundra's BSIMusicType subobject, or nullptr if unresolved.
-    const RE::BSIMusicType* Target();
+    // Game thread: log the state of every retargeted type (kPostLoadGame etc.). No writes.
+    void LogState(const char* a_why);
 
 }

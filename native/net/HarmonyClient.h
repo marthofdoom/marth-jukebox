@@ -104,6 +104,11 @@ namespace MJ::Net {
         bool                     ffmpeg = false;
         std::vector<std::string> containers;         // missing field => {"wav"}
         CacheInfo                cache;
+        // `services` {"library": bool, "ytmusic": bool, "qobuz": bool}: which sources `all` would use now.
+        // A server that reports it also accepts a `sources` LIST ("library,ytmusic"); an older one does not.
+        bool                     servicesReported = false;
+        bool                     libraryUsable = false, ytmusicUsable = false, qobuzUsable = false;
+        std::vector<std::string> excludedServices;
     };
 
     // UNTRUSTED: every string here comes from the server verbatim. In particular `id` and `service`
@@ -126,14 +131,23 @@ namespace MJ::Net {
         std::string        sources;
     };
 
-    // One row of /api/search. Fields that a kind does not have stay empty/zero.
+    // One row of /api/search (or of a library / playlist listing). Fields a kind does not have stay empty/zero.
     struct SearchItem {
         std::string  service, id, title, artist, album;
+        std::string  owner;          // playlists
         std::int64_t durationS = 0;
+        std::int64_t trackCount = 0; // playlists, genres, artists (when the server says)
     };
 
     struct SearchResult : Result {
-        std::vector<SearchItem> tracks, artists, albums;
+        std::vector<SearchItem> tracks, artists, albums, playlists;
+    };
+
+    // GET /api/library/view?view=genres|artists (the live Library, federated) or GET /api/playlists.
+    // Genres: title = name, id = name. Artists: id, title = name, service "local".
+    struct BrowseResult : Result {
+        bool                    enabled = true;  // false: the server has no Library
+        std::vector<SearchItem> items;
     };
 
     struct AudioInfo {
@@ -178,6 +192,9 @@ namespace MJ::Net {
                           int a_count, bool a_peek, std::string_view a_container, std::stop_token a_st = {});
         SearchResult Search(std::string_view a_query, std::string_view a_kinds, int a_limit,
                             std::stop_token a_st = {});
+        // a_view: "genres" or "artists" (anything else is kBadRequest locally). a_limit 1..5000.
+        BrowseResult LibraryView(std::string_view a_view, int a_limit, std::stop_token a_st = {});
+        BrowseResult Playlists(std::stop_token a_st = {});
         // POST /api/game/playing: tells Harmony the game started this track (best effort; a failure
         // is only a returned error). All four fields are required by the server.
         Result       ReportPlaying(std::string_view a_profile, std::string_view a_type, std::string_view a_service,
