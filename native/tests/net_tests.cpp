@@ -472,6 +472,10 @@ namespace {
         HarmonyClient cl;
         Config cfg = MakeConfig(s.Url());
         cfg.receiveTimeoutMs = 400;
+        // Small connect/send too: under Wine the async send task itself waits for the reply and no
+        // WinHTTP timeout fires, so the client's send-phase budget (2*500 + 500 + 400 + 500 ms) bounds it.
+        cfg.connectTimeoutMs = 500;
+        cfg.sendTimeoutMs    = 500;
         Configured(cl, cfg);
         const auto t0 = std::chrono::steady_clock::now();
         const StatusResult r = cl.Status();

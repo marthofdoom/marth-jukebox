@@ -232,8 +232,9 @@ namespace MJ::Net {
 
         // The worker enforces the configured timeouts itself: it waits for an async op at most
         // WinHTTP's own timeout + this grace, then abandons the request (kTimeout, logged). On Windows
-        // WinHTTP's timeout fires first; under Wine 10 the async receive timeout was observed NOT to
-        // fire at all (mj_net_tests receive_timeout, 2026-10-27), so there this is the timeout.
+        // WinHTTP's timeout fires first. Under Wine 10 (traced 2026-10-27) the async send task reads
+        // the reply itself and no receive timeout fires, so there a stalled server is bounded by the
+        // send-phase budget: 2*connect + send + receive + grace.
         constexpr DWORD kWatchdogGraceMs = 500;
 
         // Per-request state shared with the WinHTTP async callback (WinHTTP runs in async mode).

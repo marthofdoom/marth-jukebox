@@ -26,8 +26,10 @@ nlohmann-json for replies, spdlog for logging. No engine or CommonLib calls.
   a late completion never writes into freed memory, and the worker never waits for it.
 * Timeouts are enforced by the worker too: each wait has a budget of WinHTTP's own timeout + 0.5 s, after
   which the worker abandons the request with `kTimeout` and a `[net]` warning. On Windows WinHTTP's timeout
-  fires first. Under Wine 10 the async receive timeout was observed **not** to fire (the CI-built
-  `mj_net_tests.exe`, `receive_timeout`), so there the worker's budget is what bounds a stalled server.
+  fires first. Under Wine 10 (traced with `WINEDEBUG=+winhttp`) the async send task waits for the reply
+  itself and **no** receive timeout fires, so there a server that never answers is bounded by the worker's
+  send-phase budget: 2 x connect + send + receive timeout + 0.5 s (defaults: 5+5+15+30+0.5 s; a download
+  uses its longer receive timeout).
 * Wine 10 (local run of the CI exe, 2026-10-27): all cancel tests pass (wait phase, mid-body, racing start,
   two-client stress). Proton itself is still to be run.
 * Nothing throws across the API; every call returns a struct derived from `Result`
