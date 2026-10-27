@@ -32,9 +32,12 @@ get the page moderated.
 - Credentials: only the user's own personal key, sent as `X-Harmony-Key` to that URL.
 - All of the above documented on the mod page and in `README.md`.
 
-## Open judgement calls (for marth)
+## Decisions (marth 2026-10-27)
 
-- Default `sources`: `library` (safest for Nexus) vs `all` (works with zero accounts, which is the
-  Harmony design goal). Recommendation: **library by default, one clear opt-in for streaming**.
-- Whether to tag AI-Generated Content. Recommended for honesty; the rule makes undisclosed use a
-  moderation matter, and the tag cannot be avoided if the code is mostly agent-written.
+- Default `sources` is **library only**. Streaming is a per-environment checkbox in the SKSE menu, off by default.
+- The mod stays **unreleased on Nexus** until Spotify support exists in Harmony. Re-read this doc and the
+  Nexus guidelines at release time; the Spotify route (no official audio API) raises the same
+  copyright question as YouTube and must be assessed before any page goes up.
+- Advice recorded: if streaming is used, prefer a signed-out Harmony YouTube session or a throwaway
+  account, never a main account (yt-dlp warns that account use can get the account flagged).
+- AI-Generated Content tag at release: still to be confirmed by marth.

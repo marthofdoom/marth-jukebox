@@ -61,7 +61,11 @@ modlist (Requiem, LoreRim...). Instead the plugin edits the winning in-memory MU
    verified for 1.5.97/1.6.1170 and its API license before adoption), not MCM, because MCM has no text
    fields or dynamic search lists. Page: server URL, key (masked), test-connection button, per category a
    source picker (Vanilla / Genre / Artist / Playlist / Query) with a search box backed by `/api/search`,
-   sources `library`/`all` (default `library`, see docs/NEXUS-COMPLIANCE.md), cache cap, pool status.
+   a per-category **"Allow streaming (YouTube Music / Qobuz)" checkbox**, off by default
+   (marth 2026-10-27), cache cap, pool status. The checkbox maps to the request-level `sources` field
+   of `POST /api/game/next` (`library` unchecked, `all` checked), so it is decided per type with no
+   profile rewrite; pools are keyed by (type, sources), and flipping the box drops that type's pool.
+   Default is library only, see docs/NEXUS-COMPLIANCE.md.
    Settings persist to an INI in `Data/SKSE/Plugins/`; the plugin `PUT`s the resulting profile to
    Harmony. Fallback if the framework proves unsuitable: own ImGui overlay as in MFO's Board (more
    code, duplicate-hook risk with other ImGui mods).
