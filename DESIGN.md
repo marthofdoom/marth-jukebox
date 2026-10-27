@@ -153,6 +153,11 @@ serves 30 s previews without a subscription). Consequences:
   it is signed in, so v1.0 needs a Harmony change (follow-up branch after `game-pools`): `sources` also
   accepts a service list or an exclusion (for example `["library","ytmusic"]`), and `status` lists the usable
   sources.
+- **Qobuz is opt-in via an INI switch (marth 2026-10-27):** `[General] AllowQobuz=0` by default. The per-environment
+  streaming checkbox sends `sources` = `library,ytmusic`; only with `AllowQobuz=1` does it send
+  `library,ytmusic,qobuz`. The key is never shown in the menu; the setting lives in the INI only. Harmony's
+  `game-pools` branch accepts the service list (`sources` comma subset, `game_excluded_services`), so no Harmony
+  exclusion is needed for this. Every `next` call passes `sources` explicitly (profile default is `library`).
 - Independent of that, the plugin ALWAYS validates a downloaded track before it enters the pool: decoded
   duration (from the WAV `data` size, or FLAC STREAMINFO) must be at least 90% of the `duration_s` that `next`
   reported for tracks longer than 60 s; anything shorter is discarded, logged ("preview or truncated stream") and
