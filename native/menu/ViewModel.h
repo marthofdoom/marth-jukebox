@@ -159,8 +159,12 @@ namespace MJ::Menu
 	void SetMode(Settings& a_settings, const std::string& a_envId, Mode a_mode, bool a_inherit = false);
 	void SetStreaming(Settings& a_settings, const std::string& a_envId, bool a_value);
 	void SetRememberPlace(Settings& a_settings, const std::string& a_envId, bool a_value);
-	// Free text for Query mode / a typed genre. Mode must already be Genre or Query; otherwise no change.
+	// The typed text field (every mode except Vanilla). Genre/Query: the text is the selector. Artist/Playlist: typing a
+	// different name than the picked suggestion drops the stored service + id (see NeedsLink); the same name keeps them.
+	// False (no change) for Vanilla, a missing entry or invalid text.
 	bool SetSelectorText(Settings& a_settings, const std::string& a_envId, const std::string& a_text);
+	// Artist/Playlist typed but not linked to a service + id yet: ProfileBuilder cannot publish it until a suggestion is chosen.
+	[[nodiscard]] bool NeedsLink(const EnvSetting& a_setting);
 	// Pool size for every configured entry (3 | 5 | 8; anything else is ignored).
 	void SetPoolSizeAll(Settings& a_settings, int a_size);
 

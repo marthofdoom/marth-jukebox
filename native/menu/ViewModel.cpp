@@ -283,16 +283,26 @@ namespace MJ::Menu
 	bool SetSelectorText(Settings& a_settings, const std::string& a_envId, const std::string& a_text)
 	{
 		const auto it = a_settings.environments.find(a_envId);
-		if (it == a_settings.environments.end() || (it->second.mode != Mode::Genre && it->second.mode != Mode::Query)) {
+		if (it == a_settings.environments.end() || it->second.mode == Mode::Vanilla) {
 			return false;
 		}
 		if (!ValidateSelectorText(a_text).ok) {
 			return false;
 		}
-		it->second.selector = a_text;
-		it->second.service.clear();
-		it->second.id.clear();
+		auto& e = it->second;
+		const bool linked = e.mode == Mode::Artist || e.mode == Mode::Playlist;
+		if (linked && a_text == e.selector) {
+			return true;  // same name as the picked suggestion: keep its service + id
+		}
+		e.selector = a_text;
+		e.service.clear();  // typed text no longer refers to the picked artist/playlist
+		e.id.clear();
 		return true;
+	}
+
+	bool NeedsLink(const EnvSetting& a_setting)
+	{
+		return (a_setting.mode == Mode::Artist || a_setting.mode == Mode::Playlist) && a_setting.id.empty();
 	}
 
 	void SetPoolSizeAll(Settings& a_settings, int a_size)

@@ -208,18 +208,39 @@ MJ_TEST(Edit_StreamingDefaultsOffAndIsPerEnvironment)
 	MJ_CHECK(!s.Find("combat")->allowStreaming);
 }
 
-MJ_TEST(Edit_SelectorTextOnlyForGenreAndQuery)
+MJ_TEST(Edit_SelectorTextIsTypedForEveryNonVanillaMode)
 {
 	auto s = mj::config::DefaultSettings();
 	MJ_CHECK(!SetSelectorText(s, "explore", "x"));  // no entry
-	SetMode(s, "explore", Mode::Artist);
-	MJ_CHECK(!SetSelectorText(s, "explore", "x"));
+	SetMode(s, "explore", Mode::Vanilla);
+	MJ_CHECK(!SetSelectorText(s, "explore", "x"));  // Vanilla has no selector
 	SetMode(s, "explore", Mode::Query);
 	MJ_CHECK(SetSelectorText(s, "explore", "calm piano"));
 	MJ_CHECK(s.Find("explore")->selector == "calm piano");
 	MJ_CHECK(!SetSelectorText(s, "explore", std::string(201, 'a')));
 	MJ_CHECK(s.Find("explore")->selector == "calm piano");
 	MJ_CHECK(!SetSelectorText(s, "explore", "bad\nline"));
+	SetMode(s, "combat", Mode::Genre);
+	MJ_CHECK(SetSelectorText(s, "combat", "Epic"));
+	MJ_CHECK(s.Find("combat")->selector == "Epic" && !NeedsLink(*s.Find("combat")));
+}
+
+MJ_TEST(Edit_TypedArtistNeedsLinkUntilSuggestionPicked)
+{
+	auto s = mj::config::DefaultSettings();
+	SetMode(s, "explore", Mode::Artist);
+	MJ_CHECK(SetSelectorText(s, "explore", "Sigur"));
+	MJ_CHECK(s.Find("explore")->selector == "Sigur" && NeedsLink(*s.Find("explore")));
+	MJ_CHECK(ApplyHit(s, "explore", Hit("artist", "local", "9", "Sigur Ros")));
+	MJ_CHECK(!NeedsLink(*s.Find("explore")));
+	MJ_CHECK(SetSelectorText(s, "explore", "Sigur Ros"));   // blur with the unchanged label keeps the link
+	MJ_CHECK(s.Find("explore")->id == "9" && s.Find("explore")->service == "local");
+	MJ_CHECK(SetSelectorText(s, "explore", "Other"));        // a different name drops it
+	MJ_CHECK(s.Find("explore")->id.empty() && NeedsLink(*s.Find("explore")));
+	SetMode(s, "town", Mode::Playlist);
+	MJ_CHECK(NeedsLink(*s.Find("town")));
+	SetMode(s, "boss", Mode::Genre);
+	MJ_CHECK(!NeedsLink(*s.Find("boss")));
 }
 
 MJ_TEST(Edit_PoolSizeAllAndCurrent)

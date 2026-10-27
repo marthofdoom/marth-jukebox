@@ -54,7 +54,6 @@ namespace MJ::Menu
 			bool      showKey = false;
 
 			std::map<std::string, TextField>       queryText;   // Query mode text, per environment
-			std::map<std::string, std::string>     searchText;  // search box content, per environment
 			std::string                            searchEnv;   // which row owns the shared search results
 			Debouncer                              searchDebounce;
 			std::map<std::string, bool>            peekWanted;
@@ -281,7 +280,6 @@ namespace MJ::Menu
 						const std::string id = a_row.id;
 						Change([&](Settings& st) { SetMode(st, id, ch.mode, ch.inherit); });
 						s.queryText.erase(id);
-						s.searchText[id].clear();
 						s.searchEnv.clear();
 						if (ModeNeedsSearch(ch.mode) && !ch.inherit) {
 							StartSearch(id, ch.mode, "", streaming);  // browse list: reachable without a keyboard
@@ -293,61 +291,61 @@ namespace MJ::Menu
 
 			Line("Selected: " + DescribeSelection(a_set, a_row));
 
-			if (ModeNeedsSearch(curMode)) {
-				auto& text = s.searchText[a_row.id];
-				UI::SetNextItemWidth(320.0f);
-				if (EditText("Search##search", "type to search the library", text, 200)) {
-					s.searchEnv = a_row.id;
-					s.searchDebounce.Touch(NowMs());
-				}
-				UI::SameLine();
-				if (UI::Button("Show choices")) {
-					StartSearch(a_row.id, curMode, text, streaming);
-				}
-				Tooltip("Lists what the server has, without typing (also for controller use).");
-				if (curMode == Mode::Genre && !text.empty() && ValidateSelectorText(text).ok) {
-					if (UI::Button("Use the typed text as the genre")) {
-						const std::string id = a_row.id;
-						const std::string t = text;
-						Change([&](Settings& st) { SetSelectorText(st, id, t); });
-					}
-				}
-
-				if (s.searchEnv == a_row.id) {
-					if (s.search.busy) {
-						Colored(kWarn, "Searching...");
-					}
-					if (!s.search.error.empty()) {
-						Colored(kBad, s.search.error);
-					}
-					const auto hits = FilterHits(s.search.hits, curMode, streaming);
-					if (UI::BeginListBox("##results", UI::ImVec2{ 0.0f, 170.0f })) {
-						for (std::size_t i = 0; i < hits.size(); ++i) {
-							const bool picked = own && !hits[i].id.empty() && own->id == hits[i].id && own->service == hits[i].service;
-							const std::string label = HitLabel(hits[i]) + "##hit" + std::to_string(i);
-							if (UI::Selectable(label.c_str(), picked)) {
-								const std::string id = a_row.id;
-								const App::SearchHit hit = hits[i];
-								Change([&](Settings& st) { ApplyHit(st, id, hit); });
-							}
-						}
-						if (hits.empty() && !s.search.busy) {
-							UI::TextColored(kDim, "%s", "No results yet. Type a search or press Show choices.");
-						}
-						UI::EndListBox();
-					}
-				}
-			} else if (curMode == Mode::Query) {
+			if (curMode != Mode::Vanilla) {
+				// The selector is ALWAYS a plain typed text field (marth 2026-10-27): genre, artist or playlist name, or search words.
 				auto& field = s.queryText[a_row.id];
 				field.SyncFromStore(own ? own->selector : std::string{});
+				const char* hint = curMode == Mode::Genre ? "type a genre, e.g. Ambient"
+					: curMode == Mode::Artist ? "type an artist name"
+					: curMode == Mode::Playlist ? "type a playlist name" : "e.g. calm piano";
 				UI::SetNextItemWidth(420.0f);
-				EditText("Search words##query", "e.g. calm piano", field.edit, 800);
+				if (EditText("Text##selector", hint, field.edit, 800) && ModeNeedsSearch(curMode)) {
+					s.searchEnv = a_row.id;
+					s.searchDebounce.Touch(NowMs());  // suggestions follow the typing (400 ms after it stops)
+				}
 				if (UI::IsItemDeactivatedAfterEdit()) {
 					CommitTextFields();
 				}
 				const auto chk = ValidateSelectorText(field.edit);
 				if (!chk.ok) {
 					Colored(kBad, chk.message);
+				}
+				if (own && NeedsLink(*own)) {
+					Colored(kWarn, "Not linked to a specific " + std::string(SearchKindFor(curMode)) +
+						" yet: choose one of the suggestions below so the server knows which one you mean.");
+				}
+
+				if (ModeNeedsSearch(curMode)) {
+					if (UI::Button("Show suggestions")) {
+						StartSearch(a_row.id, curMode, field.edit, streaming);
+					}
+					Tooltip("Lists matches from the server (also the way to pick without a keyboard).");
+					if (s.searchEnv == a_row.id) {
+						if (s.search.busy) {
+							Colored(kWarn, "Searching...");
+						}
+						if (!s.search.error.empty()) {
+							Colored(kBad, s.search.error);
+						}
+						const auto hits = FilterHits(s.search.hits, curMode, streaming);
+						UI::TextColored(kDim, "%s", "Suggestions (optional)");
+						if (UI::BeginListBox("##results", UI::ImVec2{ 0.0f, 170.0f })) {
+							for (std::size_t i = 0; i < hits.size(); ++i) {
+								const bool picked = own && !hits[i].id.empty() && own->id == hits[i].id && own->service == hits[i].service;
+								const std::string label = HitLabel(hits[i]) + "##hit" + std::to_string(i);
+								if (UI::Selectable(label.c_str(), picked)) {
+									const std::string id = a_row.id;
+									const App::SearchHit hit = hits[i];
+									Change([&](Settings& st) { ApplyHit(st, id, hit); });
+									s.queryText.erase(id);  // the text field re-reads the stored value
+								}
+							}
+							if (hits.empty() && !s.search.busy) {
+								UI::TextColored(kDim, "%s", "No suggestions yet.");
+							}
+							UI::EndListBox();
+						}
+					}
 				}
 			}
 
@@ -520,12 +518,12 @@ namespace MJ::Menu
 			if (s.searchDebounce.Poll(now, kSearchDebounceMs) && !s.searchEnv.empty()) {
 				const auto* e = set.Find(s.searchEnv);
 				if (e && ModeNeedsSearch(e->mode)) {
-					StartSearch(s.searchEnv, e->mode, s.searchText[s.searchEnv], e->allowStreaming);
+					StartSearch(s.searchEnv, e->mode, s.queryText[s.searchEnv].edit, e->allowStreaming);
 				}
 			}
 
 			Wrapped("Controller: text boxes need a keyboard. Everything else works with a controller: pick a source, press "
-					"Show choices, and choose from the list.");
+					"Show suggestions, and choose from the list.");
 
 			if (const auto* q = g_queue.load()) {
 				if (const auto err = q->LastError(); !err.empty()) {
