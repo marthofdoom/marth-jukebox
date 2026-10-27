@@ -31,3 +31,22 @@ Parallel, already running: Harmony `game-pools` (variety). Done: Harmony FLAC co
   checkbox + share combo on each environment row. Needs: Settings key (`Mix`, `MixPercent`), SlotAssign/Retarget
   entry selection (deterministic pick of which entries to replace, stable across sessions), tests, README line.
   Tier A for the Retarget change (Opus), menu part Sonnet.
+
+## 1.1.0 (larger; mostly Harmony-side)
+- **Track vetting (marth 2026-10-27): catch tracks that do not match the theme.** A query like "epic battle music"
+  or genre "ambient" returns whatever the streaming search ranks, including off-theme results (talks, reaction
+  videos, 10-hour loops, remixes with vocals, live recordings with crowd noise, mislabelled tracks). Marth's view:
+  likely better done on the Harmony side. Approach to design (nothing decided):
+  - **Harmony (preferred home):** a vetting stage between candidate collection and the pool: metadata rules
+    (title/channel/description keywords, duration window, category), audio checks with the ffmpeg Harmony
+    already has (speech detection, silence ratio, loudness/dynamics, clipping, crowd noise), optional
+    classifier or embedding score against the requested theme, a per-type reject list, and a persistent
+    verdict cache so each track is judged once. Game-source API additions: vetting level per profile/type and a
+    reject reason in `next`/status for diagnostics. This belongs in the real Harmony repo (owned by the Harmony
+    agent/marth); the jukebox side must not push to Harmony main without that coordination.
+  - **Plugin side (small):** a "this track does not fit" action (menu button / hotkey) that skips to the next
+    track and reports the track id + environment to Harmony as negative feedback (new endpoint), and shows a
+    vetting-level setting per environment (off / normal / strict). The plugin already has the preview guard
+    (truncated or 30 s preview) and the plugin-side recent list; vetting is the semantic counterpart.
+  - Needs: Harmony API design doc first (branch in the Harmony repo, reviewed by Opus), then the jukebox client
+    endpoint + menu control, then a LoreRim test with deliberately off-theme queries.
