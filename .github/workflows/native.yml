@@ -65,3 +65,16 @@ jobs:
             native/build/release/MarthJukebox.dll
             native/build/release/MarthJukebox.pdb
           if-no-files-found: error
+
+      # Pure-C++ core tests (native/core.cmake): reconfigure the same tree with the option, build only the
+      # test target and run it. Any failing check makes mj_core_tests exit non-zero and fails the job.
+      - name: Core tests
+        run: |
+          cmake --preset release -DMJ_BUILD_TESTS=ON
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build/release --target mj_core_tests
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\build\release\mj_core_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+        env:
+          VCPKG_ROOT: C:\vcpkg

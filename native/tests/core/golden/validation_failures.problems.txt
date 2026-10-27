@@ -1,0 +1,12 @@
+ERROR bad name!: environment id is not a valid Harmony type name; left out of the profile
+ERROR boss: query is empty; environment left out of the profile
+ERROR combat: genre is 201 characters; Harmony allows at most 200; environment left out of the profile
+ERROR default: 'default' is reserved; left out of the profile
+ERROR discovery: artist: id is empty (pick an item from the search list); environment left out of the profile
+ERROR dungeon: query contains a control character; environment left out of the profile
+ERROR special: genre is not valid UTF-8; environment left out of the profile
+ERROR stinger: playlist: id contains a character Harmony does not accept; environment left out of the profile
+WARN  story: the Library has no playlists: this selector will yield no tracks
+WARN  tavern: artist is on YouTube Music but streaming is not allowed: with sources=library it will yield no tracks
+ERROR town: artist service must be 'local' or 'ytmusic' (Qobuz is not supported); environment left out of the profile
+

@@ -1,0 +1,216 @@
+# edid<TAB>plugin<TAB>group<TAB>sub<TAB>retargetable<TAB>diegetic (independent expectation, hand-derived from the M0a log)
+018MUSAuriHome	018Auri.esp	unmapped		0	0
+_AII_MUSCombatBoss	AncientBloodII.esl	unmapped		0	0
+Haiku_MusicType	Ascend - Hidden Peaks of Skyrim.esp	unmapped		0	0
+Haiku_Silence	Ascend - Hidden Peaks of Skyrim.esp	unmapped		0	0
+DDB_manny_GF_MusicAlShedim	BetalillesHammerfellQuestBundle.esp	unmapped		0	0
+ccBGSSSE067_MUSCombatBoss	ccbgssse067-daedinv.esm	boss		1	0
+MUSCombatBossDLC1	Dawnguard.esm	boss		1	0
+MUSDungeonDLCVampireCastle	Dawnguard.esm	dungeon		1	0
+MUSEclipse	Dawnguard.esm	special	eclipse	1	0
+MUSExploreDLCFalmerValley	Dawnguard.esm	explore	generic	1	0
+MUSExploreDLCSoulCairn	Dawnguard.esm	explore	generic	1	0
+DLC2MUSCombatBoss	Dragonborn.esm	boss		1	0
+DLC2MUSCombatKarstaag	Dragonborn.esm	boss		1	0
+DLC2MUSDungeonApocrypha	Dragonborn.esm	dungeon		1	0
+DLC2MUSExploreMountain	Dragonborn.esm	explore	mountain	1	0
+DLC2MUSExploreSnow	Dragonborn.esm	explore	snow	1	0
+DLC2MUSExploreSolstheimGeneral	Dragonborn.esm	explore	generic	1	0
+MUSDLC2BoatArrival	Dragonborn.esm	special	boat_arrival	1	0
+Eli_MUSVault	Eli_Dovah Vault.esp	unmapped		0	0
+evgSRMUS06onlyDARK	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtemple	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtemple07DARK	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtempleDARK	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtempleDARK05	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtempleLIGHT04	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtempleLIGHT08	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtempleMIX	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUShonrichtempleMIX09	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSmainhall2	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSmainhall3	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSmainhallonly	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSRcayricedoors	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSReveal2	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSRpeletiusreveal	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSRpeletiusrpancake	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStype06collapse	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypechimesecrets	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypeFINALBOSS	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypefirstcutscene	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypeHorrorHeavy	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypeHorrorLight	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypeHorrorMedium	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypeLarelleisAppear	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypetemplefirstsight	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypetemplereveal	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypetimer40panic	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUStypetrance	evgSIRENROOT.esm	unmapped		0	0
+evgSRMUSyineellost	evgSIRENROOT.esm	unmapped		0	0
+GRVEMUSCombatGolemBoss	FalkreathShades.esp	unmapped		0	0
+GRVEMUSCombatWraithmotherBoss	FalkreathShades.esp	unmapped		0	0
+GRVEMUSExploreUndercity	FalkreathShades.esp	unmapped		0	0
+000FCMUSArbiter	ForgottenCity.esp	unmapped		0	0
+000FCMUSArbiterMotif	ForgottenCity.esp	unmapped		0	0
+000FCMUSCombat	ForgottenCity.esp	unmapped		0	0
+000FCMUSDiscovery	ForgottenCity.esp	unmapped		0	0
+000FCMUSDread	ForgottenCity.esp	unmapped		0	0
+000FCMUSDreadHighPriority	ForgottenCity.esp	unmapped		0	0
+000FCMUSExplore	ForgottenCity.esp	unmapped		0	0
+000FCMUSJudgment	ForgottenCity.esp	unmapped		0	0
+000FCThrivingCity	ForgottenCity.esp	unmapped		0	0
+HD1CampsiteSounds	GORE.esp	unmapped		0	0
+HD1GoreCombatMusic	GORE.esp	unmapped		0	0
+HD1InterludeMusic	GORE.esp	unmapped		0	0
+MUSGoreCombat	GORE.esp	unmapped		0	0
+MusGoreCombatLyrics	GORE.esp	unmapped		0	0
+MUSGoreInterlude	GORE.esp	unmapped		0	0
+MUSGoreNighttime	GORE.esp	unmapped		0	0
+MUSGoreSad1	GORE.esp	unmapped		0	0
+MUSGoreSad2	GORE.esp	unmapped		0	0
+manny_GF_MusicAkavir	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicAlikrDesert	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicAlShedim	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicBenErai	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicCaveOfMoraSul	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicColdharbour	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicCombatCursedCity	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicCombatThePit	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicDread	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicEndTitles	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicGrayCowlFound	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicHallOfTheWest	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicMausoleumChampion	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicMausoleumSheogorath	Gray Fox Cowl.esm	unmapped		0	0
+manny_GF_MusicOblivionTheme	Gray Fox Cowl.esm	unmapped		0	0
+MUSMorrowindCity	Journey to Baan Malur.esp	unmapped		0	0
+AK69CozyMusic	Katana.esp	unmapped		0	0
+AK69MUSHideout	Katana.esp	unmapped		0	0
+SDE_RomanceTheme	SeranaDialogueExpansion - Romance.esp	unmapped		0	0
+EC_SS_ExploreDementia	Skyrim Extended Cut - Saints and Seducers.esp	unmapped		0	0
+EC_SS_ExploreMania	Skyrim Extended Cut - Saints and Seducers.esp	unmapped		0	0
+EC_SS_MUSCombat	Skyrim Extended Cut - Saints and Seducers.esp	combat		1	0
+EC_SS_MUSDiscoverySpecial	Skyrim Extended Cut - Saints and Seducers.esp	discovery	generic	1	0
+EC_SS_MUSDiscoveryTown	Skyrim Extended Cut - Saints and Seducers.esp	discovery	town	1	0
+_NONE	Skyrim.esm	menu		0	0
+MUSAlduinDeath	Skyrim.esm	special	alduin_death	1	0
+MUSCastle	Skyrim.esm	town	castle	1	0
+MUSCombat	Skyrim.esm	combat		1	0
+MUSCombatBoss	Skyrim.esm	boss		1	0
+MUSCombatBossChargen	Skyrim.esm	story	chargen	0	1
+MUSCombatCivilWar	Skyrim.esm	combat	civil_war	1	0
+MUSDiscoveryCity	Skyrim.esm	discovery	city	1	0
+MUSDiscoveryDungeon	Skyrim.esm	discovery	dungeon	1	0
+MUSDiscoveryGeneric	Skyrim.esm	discovery	generic	1	0
+MUSDiscoveryHighHrothgar	Skyrim.esm	discovery	high_hrothgar	1	0
+MUSDiscoveryTown	Skyrim.esm	discovery	town	1	0
+MUSDread	Skyrim.esm	discovery	dread	1	0
+MUSDungeon	Skyrim.esm	dungeon		1	0
+MUSDungeonCave	Skyrim.esm	dungeon	cave	1	0
+MUSDungeonChargen	Skyrim.esm	story	chargen	0	1
+MUSDungeonCleared	Skyrim.esm	stinger	dungeon_cleared	1	0
+MUSDungeonFort	Skyrim.esm	dungeon	fort	1	0
+MUSDungeonIce	Skyrim.esm	dungeon	ice	1	0
+MUSE3DemoDungeon	Skyrim.esm	unmapped		0	0
+MUSE3DemoExplore	Skyrim.esm	unmapped		0	0
+MUSExploreCoast	Skyrim.esm	explore	coast	1	0
+MUSExploreForestFall	Skyrim.esm	explore	forest_fall	1	0
+MUSExploreForestPine	Skyrim.esm	explore	forest_pine	1	0
+MUSExploreMarsh	Skyrim.esm	explore	marsh	1	0
+MUSExploreMountain	Skyrim.esm	explore	mountain	1	0
+MUSExploreReach	Skyrim.esm	explore	reach	1	0
+MUSExploreSnow	Skyrim.esm	explore	snow	1	0
+MUSExploreSovngarde	Skyrim.esm	story	sovngarde	0	1
+MUSExploreSovngardeChant	Skyrim.esm	story	sovngarde	0	1
+MUSExploreSovngardeChantExterior	Skyrim.esm	story	sovngarde	0	1
+MUSExploreTestb	Skyrim.esm	explore	generic	1	0
+MUSExploreTundra	Skyrim.esm	explore	tundra	1	0
+MUSOdahviingRiding	Skyrim.esm	special	odahviing	1	0
+MUSReveal	Skyrim.esm	stinger	reveal	1	0
+MUSReward	Skyrim.esm	stinger	reward	1	0
+MUSSkillsMenu	Skyrim.esm	menu		0	0
+MUSSovngardeHallofValor	Skyrim.esm	story	hall_of_valor	0	1
+MUSSpecialCart	Skyrim.esm	story	intro	0	1
+MUSSpecialDeath	Skyrim.esm	special	death	1	0
+MUSSpecialElderScrollSquence	Skyrim.esm	special	elder_scroll	1	0
+MUSSpecialHallofValor	Skyrim.esm	story	hall_of_valor	0	1
+MUSSpecialIntro	Skyrim.esm	story	intro	0	1
+MUSSpecialSuccess	Skyrim.esm	stinger	success	1	0
+MUSSpecialWordOfPower	Skyrim.esm	story	word_of_power	0	1
+MUSStinger	Skyrim.esm	stinger		1	0
+MUSTavern	Skyrim.esm	tavern		0	1
+MUSTavernB	Skyrim.esm	tavern		0	1
+MUSTavernSILENCE	Skyrim.esm	tavern		0	0
+MUSTownTest	Skyrim.esm	town	town	1	0
+_Talent_Silence	SkyrimsGotTalent-Bards.esp	unmapped		0	0
+TOK_MUSC_DungeonAyleid	Tools of Kagrenac.esp	unmapped		0	0
+TOK_MUSC_RevealAyleid	Tools of Kagrenac.esp	unmapped		0	0
+NecroMUSDiscoveryDragontailMountains	Undeath.esp	unmapped		0	0
+NecroMUSDiscoveryScourgBarrow	Undeath.esp	unmapped		0	0
+NecroMUSDungeonApocrypha	Undeath.esp	unmapped		0	0
+NecroMUSDungeonBrokerShack	Undeath.esp	unmapped		0	0
+NecroMUSDungeonRavenscornSpire	Undeath.esp	unmapped		0	0
+NecroMUSDungeonScourgBarrow	Undeath.esp	unmapped		0	0
+NecroMUSDungeonSewers	Undeath.esp	unmapped		0	0
+NecroMUSExploreDragontailMountains	Undeath.esp	unmapped		0	0
+ccMUSDungeonOblivion	Update.esm	dungeon		1	0
+MUSCombatBossUmbra	Update.esm	boss		1	0
+zCHMusColdharbourRealm	Vigilant.esm	unmapped		0	0
+zCHMusDungeonCave	Vigilant.esm	unmapped		0	0
+zCHMUSDungeonDarkSewer	Vigilant.esm	unmapped		0	0
+zCHMusDungeonFort	Vigilant.esm	unmapped		0	0
+zCHMusDungeonMadKing	Vigilant.esm	unmapped		0	0
+zCHMusDungeonOrder	Vigilant.esm	unmapped		0	0
+zCHMusDungeonPrison	Vigilant.esm	unmapped		0	0
+zCHMusDungeonTemple	Vigilant.esm	unmapped		0	0
+zCHMusInterior	Vigilant.esm	unmapped		0	0
+zCHMusIntPrayRoom	Vigilant.esm	unmapped		0	0
+zCHMUSSardCoffin	Vigilant.esm	unmapped		0	0
+zCHMusWaterfront	Vigilant.esm	unmapped		0	0
+zCOMusCursedMansion	Vigilant.esm	unmapped		0	0
+zCOMUSMansion	Vigilant.esm	unmapped		0	0
+zzzMUSAbbot	Vigilant.esm	unmapped		0	0
+zzzMUSAredhel	Vigilant.esm	unmapped		0	0
+zzzMUSBloodSuckerKing	Vigilant.esm	unmapped		0	0
+zzzMUSBloodWork	Vigilant.esm	unmapped		0	0
+zzzMUSColosseum	Vigilant.esm	unmapped		0	0
+zzzMUSDyingPelinal	Vigilant.esm	unmapped		0	0
+zzzMUSEnding	Vigilant.esm	unmapped		0	0
+zzzMUSEndingBitter	Vigilant.esm	unmapped		0	0
+zzzMUSEndingTrue	Vigilant.esm	unmapped		0	0
+zzzMUSEndingWorst	Vigilant.esm	unmapped		0	0
+zzzMUSGorieus	Vigilant.esm	unmapped		0	0
+zzzMUSJuncan	Vigilant.esm	unmapped		0	0
+zzzMUSJyggalag	Vigilant.esm	unmapped		0	0
+zzzMUSKeeper	Vigilant.esm	unmapped		0	0
+zzzMUSLamae	Vigilant.esm	unmapped		0	0
+zzzMUSLaza	Vigilant.esm	unmapped		0	0
+zzzMUSMaraKnight	Vigilant.esm	unmapped		0	0
+zzzMUSMaram	Vigilant.esm	unmapped		0	0
+zzzMUSMary	Vigilant.esm	unmapped		0	0
+zzzMUSMinos	Vigilant.esm	unmapped		0	0
+zzzMUSMolag	Vigilant.esm	unmapped		0	0
+zzzMUSPelinal	Vigilant.esm	unmapped		0	0
+zzzMUSPiper	Vigilant.esm	unmapped		0	0
+zzzMUSRequiem	Vigilant.esm	unmapped		0	0
+zzzMUSReyda	Vigilant.esm	unmapped		0	0
+zzzMUSRitho	Vigilant.esm	unmapped		0	0
+zzzMUSSelector	Vigilant.esm	unmapped		0	0
+zzzMUSStillbornKing	Vigilant.esm	unmapped		0	0
+zzzMUSTorolf	Vigilant.esm	unmapped		0	0
+zzzMUSTower	Vigilant.esm	unmapped		0	0
+zzzMUSUmaril	Vigilant.esm	unmapped		0	0
+zzzMUSVarla	Vigilant.esm	unmapped		0	0
+zzzMUSWarChant	Vigilant.esm	unmapped		0	0
+zzzMUSWasteland	Vigilant.esm	unmapped		0	0
+WTMUSBarrow	Wyrmstooth.esp	unmapped		0	0
+WTMUSBoatIntro	Wyrmstooth.esp	unmapped		0	0
+WTMUSDimfrost	Wyrmstooth.esp	unmapped		0	0
+WTMUSDragonKilled	Wyrmstooth.esp	unmapped		0	0
+WTMUSDragonSpeech	Wyrmstooth.esp	unmapped		0	0
+WTMUSDungeon	Wyrmstooth.esp	unmapped		0	0
+WTMUSExplore	Wyrmstooth.esp	unmapped		0	0
+WTMUSReveal	Wyrmstooth.esp	unmapped		0	0
+WTMUSRevealBarrow01	Wyrmstooth.esp	unmapped		0	0
+WTMUSRevealBarrow02	Wyrmstooth.esp	unmapped		0	0
+WTMUSRevealBarrow03	Wyrmstooth.esp	unmapped		0	0

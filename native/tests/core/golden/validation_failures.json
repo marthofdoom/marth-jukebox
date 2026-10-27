@@ -1,0 +1,26 @@
+{
+  "format": {
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100
+  },
+  "normalize": true,
+  "sources": "library",
+  "types": {
+    "explore": {
+      "genre": "Ambient"
+    },
+    "story": {
+      "playlist": {
+        "id": "abc",
+        "service": "local"
+      }
+    },
+    "tavern": {
+      "artist": {
+        "id": "UCabc",
+        "service": "ytmusic"
+      }
+    }
+  }
+}

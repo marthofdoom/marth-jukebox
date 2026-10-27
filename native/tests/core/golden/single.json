@@ -1,0 +1,14 @@
+{
+  "format": {
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100
+  },
+  "normalize": true,
+  "sources": "library",
+  "types": {
+    "combat": {
+      "genre": "Metal"
+    }
+  }
+}

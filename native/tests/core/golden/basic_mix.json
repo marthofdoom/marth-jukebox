@@ -1,0 +1,35 @@
+{
+  "format": {
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100
+  },
+  "normalize": true,
+  "sources": "library",
+  "types": {
+    "boss": {
+      "playlist": {
+        "id": "PLabc_DEF-123",
+        "service": "ytmusic"
+      }
+    },
+    "combat": {
+      "query": "epic battle music orchestral"
+    },
+    "dungeon": {
+      "artist": {
+        "id": "UC1234567890abcdefghij",
+        "service": "ytmusic"
+      }
+    },
+    "explore": {
+      "genre": "Ambient"
+    },
+    "stinger": {
+      "artist": {
+        "id": "9f2c1ab04d77e310",
+        "service": "local"
+      }
+    }
+  }
+}

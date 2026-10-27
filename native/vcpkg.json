@@ -3,6 +3,7 @@
     "name": "marth-jukebox",
     "version-string": "0.1.0",
     "dependencies": [
-        "commonlibsse-ng"
+        "commonlibsse-ng",
+        "nlohmann-json"
     ]
 }
