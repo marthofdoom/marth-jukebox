@@ -1,0 +1,17 @@
+native/build/
+native/install/
+native/out/
+__pycache__/
+*.pyc
+*.zip
+*.log
+.vs/
+compile_commands.json
+
+# agent worktrees
+.claude/worktrees/
+.claude/settings.local.json
+
+# secrets: never commit server keys
+*.key
+harmony*.txt
