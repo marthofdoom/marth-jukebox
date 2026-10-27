@@ -110,75 +110,15 @@ into `default`.
 - Verify every symbol in `_commonlib/mit-3.7-fork` (not `live-alandtse-ng`). Subsystem folders under
   `native/`, ~1500-line split rule, one mechanism per build, CI is the only compiler (no local MSVC), and
   a green CI on your own SHA before reporting success. Registry: `marthofdoom/vcpkg-registry`.
-- Milestones: M0 spike (retarget one MUSC + one WAV slot, hardcoded file) -> M1 prefetch/slot loop ->
-  M2 per-category profile + INI -> M3 fallback/restore + logging -> M4 in-game picker -> release.
-
-## 8. Additions (marth 2026-10-27, after M0a)
-
-**8.1 "Remember track place" toggle, per environment.** Off: an interrupted type (explore after combat)
-resumes with a fresh pick. On: it resumes the same track from where it stopped. M0a shows the engine already
-keeps `currentTrackIndex` per type and resumes it (Explore came back at 48/125 after combat); what it does
-with the PLAYBACK POSITION is unknown. `BGSMusicSingleTrack` has `lastKnownPlaybackPosition`, `nextCuePoint`
-and `loopsRemaining`; the M0b probe must log them across an interruption before we design this. If the engine
-cannot resume mid-track from our file, the fallback is to rewrite the idle slot as a WAV that starts at the
-saved offset (a 44-byte header plus the PCM tail, or a `Range` request to Harmony, which supports
-`44 + frame * channels * bits/8` seeking). Per-type state saved in the INI/state file: track id, byte offset.
-
-**8.2 The SKSE menu must be very easy to use** (marth: a first-class requirement, not a settings dump).
-Design target: a player who has never seen Harmony can finish setup in one sitting without typing more than
-the server address.
-- First run opens a short guided page: server URL, key, a **Test connection** button with a plain result
-  ("Connected, 12,431 tracks" / "wrong key" / "cannot reach server"), then straight to the category list.
-- Each environment (Explore, Combat, Town, Tavern, Dungeon, Boss, ...) is one row: name, a **source
-  picker** (Vanilla / Genre / Artist / Playlist), a **search box** with live results from `/api/search`,
-  the **streaming** and **remember place** checkboxes, and a **Preview** button.
-- Presets ("Calm ambient everywhere", "Epic orchestral combat"), a **Reset to vanilla** per row and
-  globally, and a status line per row showing the pool fill (2 of 3 ready).
-- Controller-friendly (the framework supports it; test on the deck), readable defaults, no jargon,
-  errors in sentences.
-
-**8.3 Compressed transfer (marth idea): lossless FLAC on the wire/disk, decoded to WAV at the slot.**
-Assessment: the 29 s cold time is the server (yt-dlp resolve + ffmpeg loudnorm), not the network (the 23 MB
-file is 0.6 s once cached), so compression does not fix cold latency on a LAN. It DOES help a remote/Tailnet
-server and, more usefully, the on-disk pool (about half the size, ~1.5 GB worst case becomes ~0.8 GB).
-Plan: a small Harmony change (`format=flac` on `/api/game/audio`, `flac -0/-1` speed, bit-exact), and in
-the plugin a public-domain single-header decoder (dr_flac; licence to be verified, MIT-0/public domain)
-that expands the chosen pool file into the engine slot on the worker thread (tens of ms), then the usual
-rename. The engine still sees a plain WAV. Lossless only: the sources are already lossy, so a lossy
-re-encode would degrade them twice. Milestone M3 (after the retarget works); needs a Harmony-repo change,
-which is separate scope.
-
-**8.4 Ducking and diegetic music (marth: bards in taverns; our music must be off).** The M0a log shows how
-vanilla already does it, with the engine's own priority and ducking, so we mostly have to stay out of the way:
-| Type | Tracks | Priority | `ducksOtherMusicBy` | Role |
-|---|---|---|---|---|
-| `MUSTavern` / `MUSTavernB` | 6 / 9 Single | 55 | 0 | the **bard songs themselves** (diegetic) |
-| `MUSTavernSILENCE` | 3 **Silent** | 54 | 6000 (60%), fade 12 s | silences exploration music while inside |
-| `MUSExploreTundra` | 71 Single, 20 Palette, **16 Silent** | 49 | 0 | exploration |
-| `MUSCombat` | 30 Single | 2 | 10000 | combat |
-Rules that follow:
-- **Never retarget Silent tracks or all-Silent types** (`MUSTavernSILENCE`): they are the mechanism.
-- **Diegetic types default to Vanilla and are not offered a streaming source by default:** tavern/bard
-  (`MUSTavern*`), Sovngarde chants, Hall of Valor, intro cart, character creation, word-of-power stingers.
-  The menu shows them in a "Performed in the world (kept vanilla)" group; the player may opt in, with a
-  warning that the bard's animation will no longer match the music.
-- **Everything else on the engine's priority/ducking:** our tracks are ordinary music tracks inside the
-  vanilla types, so the bard (priority 55) displaces explore (49) exactly as before and dialogue/combat
-  ducking behave unchanged. We add no ducking logic of our own in v1.
-- **Unknown music types (other mods, e.g. bard and ambience mods) stay Vanilla** unless the player maps
-  them. This supersedes the "unknown types fall into `default`" line in section 4: LoreRim has 215 types.
-- Safety rule for later: while the current type is flagged diegetic or any type with priority above ours is
-  playing, the plugin never starts a retarget change and does not consume the pool.
-
-**8.5 Pool size is a setting.** 3 by default (WAV on disk); with FLAC (8.3) the same disk holds more, so the
-menu offers 3 / 5 / 8 per environment and shows the disk cost next to the choice.
-
-**8.6 Retarget by in-place replacement, not by shrinking the array (from the M0a data).** Vanilla explore
-mixes 16 Silent tracks among its songs: that is the cadence (long quiet gaps). Replacing the whole array with
-`[A, B]` would remove the silences and make the music continuous, and would also invalidate the stored
-`currentTrackIndex` (48 of 125 resumed after combat). Instead overwrite, in place, only the Single/Palette
-entries with our wrappers and leave Silent entries and the array size untouched. This keeps the cadence,
-needs no resize, and keeps every stored index valid. The open problem it creates: the engine may pick the
-same wrapper twice in a row; M0b must show whether a slot can be refilled once its track has finished
-(status `Finishing`/`Inactive`) before the engine asks for it again, and how crossfade (`fadeTime` 12 s on
-explore) overlaps two slots.
+- Milestones (revised, marth 2026-10-27: "Batch m1-m3 together"): M0a passive probe (done, merged) ->
+  M0b retarget + slot-protocol spike (in review) -> **v0.1 = M1+M2+M3 as ONE build**: M1 Harmony client,
+  pool of N, slot swap, fallback to vanilla; M2 SKSE Menu Framework page (guided, search, preview, per-
+  environment toggles); M3 remember-place, FLAC, bigger pool. One LoreRim test cycle for the batch, then a
+  GitHub release with the full README.
+  How the batch stays bisectable (MFO "one hook class per build" still applies to ENGINE writes): v0.1
+  adds NO new engine-write mechanism beyond M0b's in-place retarget; the new parts are network/file IO on
+  a worker (M1, M3 decode), UI (M2), and a state file (remember-place). Build them as separate subsystem
+  folders (`native/net/`, `native/pool/`, `native/menu/`) behind per-feature kill switches in the INI, so a
+  crash bisects by switching a feature off. Order within the branch: net+pool, then menu, then FLAC and
+  remember-place. The engine-dependent design (what happens when the engine re-picks a slot, crossfade,
+  resume position) waits for the M0b log; the menu, the Harmony client and the Harmony-side FLAC change do not.
