@@ -14,7 +14,8 @@ sub-environments (children) that can override it, whose Harmony type is `group.s
 
 `Classify(editorId, pluginName, hints) -> {groupId, subId, retargetable, diegetic, reason}`:
 
-1. The table is keyed by **(plugin file, EDID)**, both compared case-insensitively. A vanilla EDID owned by some
+1. The table is keyed by **(plugin file, EDID)**, both compared case-insensitively. The plugin argument is the
+   record's **origin file** (`TESForm::GetFile(0)`), not the plugin whose override wins. A vanilla EDID owned by some
    other plugin is *not* mapped: it is somebody else's music.
 2. Exact rows are tried first; prefix rows (official plugins only) come last. First match wins.
 3. `hints.allSilent` (the caller sets it when every track of the MUSC is a `BGSMusicSilenceTrack`) forces
@@ -22,6 +23,8 @@ sub-environments (children) that can override it, whose Harmony type is `group.s
 4. **Unmapped** (anything not in the table): group `unmapped`, `retargetable = No`, `diegetic = false`.
    It stays vanilla, is never offered by default, and the advanced "Other mods" list may add it individually
    under the environment id `other.<EDID>` (`OtherModsEnvId()`; characters outside `[A-Za-z0-9_-]` become `_`).
+   `other.<EDID>` applies only to records `Classify` returns as plain Unmapped: Settings refuses the id for any
+   EDID the table knows (mapped, kept-vanilla, diegetic, known leftovers or an official prefix rule).
 5. **Diegetic / kept vanilla** (`tavern`, `story`, `menu`): never retargetable, and `IsKnownEnvironmentId()`
    rejects them, so settings can never configure them.
 
@@ -227,8 +230,16 @@ The path is injected by the caller; the module does no engine calls. Writes are 
 then replace); a stale `.tmp` from a crashed save is ignored and deleted on load. The file is versioned
 (`Version=1`), tolerant of hand edits (BOM, CRLF, comments `;` and `#`, any key case, spaces around `=`,
 duplicate keys: last wins, unknown keys / sections / environments ignored and logged, bad values corrected
-and logged). Messages name keys, never values of `ServerUrl` or `PersonalKey`. Comments and unknown keys are
-not preserved when the plugin rewrites the file.
+and logged). Messages never echo user-supplied text: no values of `ServerUrl` / `PersonalKey`, and no unknown
+key, section or environment names (only "line N: unknown key ignored"). Comments and unknown keys are not
+preserved when the plugin rewrites the file.
+
+Protecting the user's file (and key): the temp file is flushed to disk before the replace. The first `Save` of a
+session keeps the previous good file as `MarthJukebox.ini.bak`. If `Load` finds an existing file it cannot use
+(unreadable, empty, zero-filled, UTF-16, no recognised key) it publishes defaults and returns false; the next
+`Save` first copies the original bytes to `MarthJukebox.ini.unreadable` (`.unreadable.1`, ... never overwriting
+an earlier copy) and refuses to save if that copy fails. A failed replace leaves the original untouched and
+removes the temp file.
 
 Defaults are safe: every environment Vanilla, and the network is off until a server URL is set
 (`NetworkActive()` = `Network` switch on AND `ServerUrl` non-empty). Values are clamped, with the reason logged.
@@ -284,23 +295,30 @@ Limits: at most 128 environment sections are kept.
   "types": {
     "explore":        {"genre": "Ambient"},
     "explore.tundra": {"genre": "Folk"},
-    "boss":           {"playlist": {"service": "ytmusic", "id": "PL..."}},
-    "default":        [{"genre": "Ambient"}, {"genre": "Folk"}, {"playlist": {"...": "..."}}]
+    "combat":         {"query": "epic battle music orchestral"}
   },
   "normalize": true,
-  "format": {"rate": 44100, "bits": 16, "channels": 2}
+  "format": {"rate": 44100, "bits": 16, "channels": 2},
+  "sources": "library"
 }
 ```
 
-- `normalize` is always `true`; `format.container` and `sources` are omitted (transport layer / per `next` call).
+- `normalize` is always `true`; `format.container` is omitted (transport layer decides).
 - Selectors: Genre -> `genre`, Query -> `query`, Artist -> `artist{service,id}`, Playlist -> `playlist{service,id}`.
-- `default` is generated: the distinct selectors of all published environments (object when one, list otherwise,
-  at most 16). The user's own environment named `default` is rejected.
+- There is **no generated `default` type**. The plugin only asks for published types, and an environment that
+  failed validation stays Vanilla instead of silently playing another environment's selector. An environment
+  literally named `default` is rejected as reserved.
+- Profile-level `sources`: Harmony's schema accepts `"library"`, `"all"` or a list (list = Harmony `game-pools`
+  branch only). The builder emits `"sources": "library"` when no published environment allows streaming, and
+  omits it otherwise (`all` would include Qobuz; a list would break older Harmony). Every `next` call still passes
+  `sources` explicitly from `AllowStreaming`, which overrides the profile's value.
 - Validation (per environment, reported as `ProfileProblem` and logged; **Error** = environment left out,
   **Warning** = published): type name 1-64 of `[A-Za-z0-9_.-]` starting alphanumeric; at most 64 types including
-  `default` (63 environments); text trimmed, 1-200 code points, no control characters, valid UTF-8; Artist/Playlist
+  all environments; text trimmed, 1-200 code points, no control characters, valid UTF-8; Artist/Playlist
   service `local`/`ytmusic` and a valid id. Warnings: YouTube Music selector while streaming is off; a local
   playlist.
 - Returns an empty string when nothing is publishable (all Vanilla, or all invalid): do not PUT then.
-- `ResolveEnvironment(settings, group, sub)` gives the type name to pass to `next` (sub if it has a section,
-  else the group) and whether it is active (`mode != Vanilla`).
+- `BuildProfile()` returns the JSON, the set of published type names and the problems. Pass it to
+  `ResolveEnvironment(settings, group, sub, &build)`: it gives the type name to pass to `next` (sub if it has a
+  section, else the group) and `Active()`, which is false for Vanilla AND for an environment the builder left
+  out with an Error (it stays Vanilla; it does not fall back to the group).

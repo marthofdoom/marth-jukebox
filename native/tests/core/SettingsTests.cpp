@@ -9,6 +9,10 @@
 #include <sstream>
 #include <thread>
 
+#if defined(_WIN32)
+#	include <windows.h>
+#endif
+
 using namespace mj::config;
 namespace fs = std::filesystem;
 
@@ -47,6 +51,21 @@ namespace
 			return std::any_of(lines.begin(), lines.end(), [&](const std::string& l) { return l.find(needle) != std::string::npos; });
 		}
 	};
+
+	std::string LowerStr(std::string s)
+	{
+		for (auto& c : s) {
+			if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+		}
+		return s;
+	}
+
+	// Leak = the secret, or its first 16 characters (a truncated echo), in any letter case.
+	bool Leaks(const std::string& line, const std::string& secret)
+	{
+		const auto l = LowerStr(line);
+		return l.find(LowerStr(secret)) != std::string::npos || l.find(LowerStr(secret.substr(0, 16))) != std::string::npos;
+	}
 
 	bool AnyContains(const Diagnostics& d, const std::string& needle)
 	{
@@ -174,6 +193,7 @@ MJ_TEST(Settings_HandEditedGarbageIsSurvived)
 	const Settings s = ParseIni(ini, d);
 	MJ_CHECK(!d.empty());
 	MJ_CHECK(s.global.serverUrl == "http://h.lan:8080");
+	MJ_CHECK(!AnyContains(d, "Bogus") && !AnyContains(d, "bogus") && !AnyContains(d, "Surprise") && !AnyContains(d, "nonsense"));
 	MJ_CHECK(s.global.cacheCapMB == kCacheCapDefaultMB);
 	MJ_CHECK(s.global.logLevel == LogLevel::Info);
 	MJ_CHECK(s.global.features.flac && !s.global.features.menu && s.global.features.retarget);
@@ -448,6 +468,19 @@ MJ_TEST(Settings_PersonalKeyNeverInMessages)
 	const std::string ini =
 		"PersonalKey " + key + "\n"                       // no '='
 		"[General]\n"
+		+ key + "=1\n"                                      // unknown key whose NAME is the secret
+		+ key.substr(0, 10) + "=1\n" +                      // ...and a truncated one
+		"[" + key + "]\n"                                   // unknown section named after the secret
+		"x=1\n"
+		"[Env:" + key + "]\n"                               // unknown environment named after the secret
+		"Mode=Genre\n"
+		"[Env:other." + key + "]\n"                         // valid advanced id built from the secret
+		"Mode=Genre\n"
+		"Selector=x\n"
+		+ key + "=1\n" +
+		"[Features]\n"
+		+ key + "=1\n" +
+		"[General]\n"
 		"PersonalKey=" + key + "\n"
 		"ServerUrl=ftp://" + key + "\n"                    // rejected URL
 		"CacheCapMB=" + key + "\n"                         // bad number
@@ -498,13 +531,157 @@ MJ_TEST(Settings_PersonalKeyNeverInMessages)
 	MJ_CHECK(!probs.empty());
 
 	// Nothing the module produced contains the key (or the URL's embedded copy of it).
-	for (const auto& line : all) MJ_CHECK_MSG(line.find(key) == std::string::npos, line);
-	for (const auto& line : produced) MJ_CHECK_MSG(line.find(key) == std::string::npos, line);
+	MJ_CHECK(!all.empty());
+	for (const auto& line : all) MJ_CHECK_MSG(!Leaks(line, key), line);
+	for (const auto& line : produced) MJ_CHECK_MSG(!Leaks(line, key), line);
 	{
 		std::lock_guard lk(cap.m);
 		MJ_CHECK(!cap.lines.empty());
-		for (const auto& line : cap.lines) MJ_CHECK_MSG(line.find(key) == std::string::npos, line);
+		for (const auto& line : cap.lines) MJ_CHECK_MSG(!Leaks(line, key), line);
 	}
 	// The INI file itself holds the key in plain text, with the warning above it.
 	MJ_CHECK(ReadAll(st.IniPath()).find("PLAIN TEXT") != std::string::npos);
+}
+
+// ---- review round: a bad Load must never cost the user's INI (and key) ---------------------------------------
+
+namespace
+{
+	const char* kGoodIni = "[General]\nServerUrl=http://harmony:8080\nPersonalKey=SEKRET-VALUE\nCacheCapMB=2048\n";
+
+	std::string Utf16Le(const std::string& ascii)
+	{
+		std::string r = "\xFF\xFE";
+		for (char c : ascii) {
+			r += c;
+			r += '\0';
+		}
+		return r;
+	}
+
+	void ExpectPreservedOnNextSave(const std::string& original, const char* what)
+	{
+		mjtest::ScratchDir dir;
+		const auto ini = dir.Path() / "MarthJukebox.ini";
+		WriteAll(ini, original);
+		SettingsStore st(ini, dir.Path());
+		MJ_CHECK_MSG(!st.Load(), what);  // reported as unusable
+		MJ_CHECK(st.Snapshot()->global.serverUrl.empty());  // defaults in memory
+		MJ_CHECK_MSG(ReadAll(ini) == original, what);       // Load itself never touches the file
+		st.Update([](Settings& s) { s.global.cacheCapMB = 999; });
+		std::string err;
+		MJ_CHECK_MSG(st.Save(&err), err);
+		const fs::path side = fs::path(ini.string() + ".unreadable");
+		MJ_CHECK_MSG(fs::exists(side), what);
+		MJ_CHECK_MSG(ReadAll(side) == original, what);      // the original bytes are intact
+		MJ_CHECK_MSG(ReadAll(ini).find("CacheCapMB=999") != std::string::npos, what);
+
+		// A second unusable file in a later session never overwrites the first preserved copy.
+		WriteAll(ini, original + "second");
+		SettingsStore st2(ini, dir.Path());
+		MJ_CHECK(!st2.Load());
+		MJ_CHECK(st2.Save());
+		MJ_CHECK(ReadAll(side) == original);
+		MJ_CHECK(ReadAll(fs::path(ini.string() + ".unreadable.1")) == original + "second");
+	}
+}
+
+MJ_TEST(Store_GarbledFileIsPreservedNotOverwritten)
+{
+	ExpectPreservedOnNextSave("", "zero-byte file");
+	ExpectPreservedOnNextSave(std::string(512, '\0'), "zero-filled file");
+	ExpectPreservedOnNextSave(Utf16Le(kGoodIni), "UTF-16 file");
+	ExpectPreservedOnNextSave("; just a comment\nnothing = here\n", "no recognised key");
+	ExpectPreservedOnNextSave("\x01\x02\x03 binary \xff\xfe", "binary");
+}
+
+#if !defined(_WIN32)
+MJ_TEST(Store_UnreadableFileRefusesSaveAndKeepsOriginal)
+{
+	mjtest::ScratchDir dir;
+	const auto ini = dir.Path() / "MarthJukebox.ini";
+	WriteAll(ini, kGoodIni);
+	fs::permissions(ini, fs::perms::none);
+	SettingsStore st(ini, dir.Path());
+	const bool canRead = std::ifstream(ini).good();
+	if (!canRead) {  // (skipped when running as root, which can read anything)
+		MJ_CHECK(!st.Load());
+		std::string err;
+		MJ_CHECK(!st.Save(&err));  // cannot preserve it => refuses
+		MJ_CHECK(!err.empty());
+		fs::permissions(ini, fs::perms::owner_all);
+		MJ_CHECK(ReadAll(ini) == kGoodIni);
+	} else {
+		fs::permissions(ini, fs::perms::owner_all);
+	}
+}
+#endif
+
+MJ_TEST(Store_KeepsBackupOfPreviousGoodFileOnFirstSaveOnly)
+{
+	mjtest::ScratchDir dir;
+	const auto ini = dir.Path() / "MarthJukebox.ini";
+	WriteAll(ini, kGoodIni);
+	const auto bak = fs::path(ini.string() + ".bak");
+	SettingsStore st(ini, dir.Path());
+	MJ_CHECK(st.Load());
+	MJ_CHECK(st.Snapshot()->global.personalKey == "SEKRET-VALUE");
+	st.Update([](Settings& s) { s.global.cacheCapMB = 3000; });
+	MJ_CHECK(st.Save());
+	MJ_CHECK(ReadAll(bak) == kGoodIni);  // the previous good file
+	st.Update([](Settings& s) { s.global.cacheCapMB = 3500; });
+	MJ_CHECK(st.Save());
+	MJ_CHECK(ReadAll(bak) == kGoodIni);  // not replaced by a later (session) state
+	MJ_CHECK(!fs::exists(fs::path(ini.string() + ".unreadable")));
+}
+
+MJ_TEST(Store_ReplaceFailureLeavesOriginalAndCleansTmp)
+{
+	// Destination is a non-empty directory: the replace step fails on every platform.
+	mjtest::ScratchDir dir;
+	const auto ini = dir.Path() / "MarthJukebox.ini";
+	fs::create_directory(ini);
+	WriteAll(ini / "keep.txt", "x");
+	SettingsStore st(ini, dir.Path());
+	st.Update([](Settings& s) { s.global.cacheCapMB = 1111; });
+	std::string err;
+	MJ_CHECK(!st.Save(&err));
+	MJ_CHECK(!err.empty());
+	MJ_CHECK(fs::is_directory(ini) && ReadAll(ini / "keep.txt") == "x");
+	MJ_CHECK(!fs::exists(fs::path(ini.string() + ".tmp")));  // no litter
+
+#if defined(_WIN32)
+	// Locked destination (open without sharing): MoveFileExW fails, the file is untouched, the error is clean.
+	mjtest::ScratchDir dir2;
+	const auto ini2 = dir2.Path() / "MarthJukebox.ini";
+	WriteAll(ini2, kGoodIni);
+	SettingsStore st2(ini2, dir2.Path());
+	MJ_CHECK(st2.Load());
+	st2.Update([](Settings& s) { s.global.cacheCapMB = 2222; });
+	MJ_CHECK(st2.Save());  // first save of the session: makes the .bak, so the next one goes straight to the replace
+	const std::string afterFirst = ReadAll(ini2);
+	st2.Update([](Settings& s) { s.global.cacheCapMB = 3333; });
+	HANDLE h = CreateFileW(ini2.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	MJ_CHECK(h != INVALID_HANDLE_VALUE);
+	std::string err2;
+	const bool saved = st2.Save(&err2);
+	CloseHandle(h);
+	MJ_CHECK(!saved && !err2.empty());
+	MJ_CHECK(ReadAll(ini2) == afterFirst);
+	MJ_CHECK(!fs::exists(fs::path(ini2.string() + ".tmp")));
+#endif
+}
+
+MJ_TEST(Settings_OtherModsIdRefusesTableEdids)
+{
+	Settings s;
+	s.environments["other.WTMUSExplore"].mode = Mode::Genre;       // plain unmapped mod EDID: kept
+	s.environments["other.MUSTavern"].mode = Mode::Genre;          // diegetic table EDID: refused
+	s.environments["other.musexploretundra"].mode = Mode::Genre;   // table EDID, any case: refused
+	s.environments["other.DLC2MUSExploreNew"].mode = Mode::Genre;  // matches an official prefix rule: refused
+	s.environments["other.MUSE3DemoDungeon"].mode = Mode::Genre;   // known leftover: refused
+	Diagnostics d;
+	Sanitize(s, d);
+	MJ_CHECK(s.environments.size() == 1 && s.Find("other.WTMUSExplore"));
+	MJ_CHECK(!d.empty());
 }

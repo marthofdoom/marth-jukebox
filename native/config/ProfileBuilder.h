@@ -4,14 +4,16 @@
 // See Harmony docs/api/game-source.md. Pure C++ (nlohmann-json inside the .cpp only).
 //
 // Output shape:
-//   { "types": { "<environment id>": <selector>, ..., "default": <selector or list> },
+//   { "types": { "<environment id>": <selector>, ... },     (no generated "default" type)
 //     "normalize": true,
-//     "format": { "rate": 44100, "bits": 16, "channels": 2 } }
-// `sources` is deliberately absent: the plugin passes it per `next` call from allowStreaming.
+//     "format": { "rate": 44100, "bits": 16, "channels": 2 },
+//     "sources": "library" }                                  (only when no environment allows streaming)
+// The plugin still passes `sources` per `next` call from allowStreaming (it overrides the profile's).
 // `format.container` is absent: the transport layer decides wav / flac.
 
 #include "config/Settings.h"
 
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,8 +21,7 @@
 namespace mj::config
 {
 	// Harmony limits (game-source.md + the brief).
-	inline constexpr std::size_t kMaxTypes             = 64;   // including "default"
-	inline constexpr std::size_t kMaxSelectorsPerType  = 16;
+	inline constexpr std::size_t kMaxTypes             = 64;
 	inline constexpr std::size_t kMaxSelectorTextChars = 200;  // code points
 
 	enum class ProblemSeverity : std::uint8_t
@@ -36,7 +37,16 @@ namespace mj::config
 		std::string     message;      // never contains the personal key or server URL
 	};
 
-	// Returns the JSON text, or an empty string when there is nothing to publish (every environment is
+	// Full result: the JSON, the set of Harmony type names that were published, and every problem.
+	struct ProfileBuild
+	{
+		std::string                 json;            // empty when nothing is publishable
+		std::set<std::string>       publishedTypes;  // environment ids present in `json`
+		std::vector<ProfileProblem> problems;
+	};
+	[[nodiscard]] ProfileBuild BuildProfile(const Settings& settings);
+
+	// Convenience wrapper: returns the JSON text, or an empty string when there is nothing to publish (every environment is
 	// Vanilla or invalid; Harmony requires at least one type). Problems are appended to `problems` and
 	// logged. Deterministic: same settings -> same bytes.
 	[[nodiscard]] std::string BuildHarmonyProfile(const Settings& settings, std::vector<ProfileProblem>* problems = nullptr);
@@ -50,9 +60,13 @@ namespace mj::config
 	{
 		std::string                typeName;  // "explore.tundra" or "explore"; empty when nothing applies
 		const EnvironmentSetting*  setting = nullptr;  // null when no entry exists (=> Vanilla)
+		bool                       excluded = false;   // the builder left it out of the profile (Error): stays Vanilla
 
 		// True when the played type should be retargeted at all.
-		[[nodiscard]] bool Active() const { return setting && setting->mode != Mode::Vanilla; }
+		[[nodiscard]] bool Active() const { return setting && setting->mode != Mode::Vanilla && !excluded; }
 	};
-	[[nodiscard]] EffectiveEnvironment ResolveEnvironment(const Settings& settings, std::string_view groupId, std::string_view subId);
+	// Pass the ProfileBuild of the profile that was actually published so an environment rejected with an Error
+	// is reported inactive (it must not fall back to a missing Harmony type).
+	[[nodiscard]] EffectiveEnvironment ResolveEnvironment(const Settings& settings, std::string_view groupId, std::string_view subId,
+		const ProfileBuild* build = nullptr);
 }

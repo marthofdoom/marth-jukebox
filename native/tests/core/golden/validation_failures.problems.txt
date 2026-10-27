@@ -1,7 +1,7 @@
 ERROR bad name!: environment id is not a valid Harmony type name; left out of the profile
 ERROR boss: query is empty; environment left out of the profile
 ERROR combat: genre is 201 characters; Harmony allows at most 200; environment left out of the profile
-ERROR default: 'default' is reserved for the generated fallback type; left out of the profile
+ERROR default: 'default' is reserved; left out of the profile
 ERROR discovery: artist: id is empty (pick an item from the search list); environment left out of the profile
 ERROR dungeon: query contains a control character; environment left out of the profile
 ERROR special: genre is not valid UTF-8; environment left out of the profile

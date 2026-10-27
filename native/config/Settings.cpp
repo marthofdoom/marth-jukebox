@@ -16,6 +16,9 @@
 #		define WIN32_LEAN_AND_MEAN
 #	endif
 #	include <windows.h>
+#else
+#	include <fcntl.h>
+#	include <unistd.h>
 #endif
 
 namespace mj::config
@@ -75,6 +78,13 @@ namespace mj::config
 				r += ok ? c : '?';
 			}
 			return r;
+		}
+
+		// Environment label for messages: a known group / group.sub id is fine to print; the user-chosen
+		// part of an "other.<EDID>" id is not echoed.
+		std::string EnvLabel(const std::string& id)
+		{
+			return id.rfind("other.", 0) == 0 ? "other.<edid>" : SafeName(id);
 		}
 
 		bool ParseBool(std::string_view v, bool& out)
@@ -153,10 +163,18 @@ namespace mj::config
 			if (!ValidTypeName(id) || id == "default") {
 				return false;
 			}
-			return categories::IsKnownEnvironmentId(id);
+			if (!categories::IsKnownEnvironmentId(id)) {
+				return false;
+			}
+			// "other.<EDID>" is only for records Classify leaves plain Unmapped: refuse any EDID the table knows
+			// (kept-vanilla, diegetic, known leftovers or mapped), so they can never be configured by the back door.
+			if (id.rfind("other.", 0) == 0 && categories::IsTableEdid(std::string_view(id).substr(6))) {
+				return false;
+			}
+			return true;
 		}
 
-		void ApplyGeneral(Settings& s, const std::string& key, std::string_view value, Diagnostics& diag)
+		bool ApplyGeneral(Settings& s, const std::string& key, std::string_view value, Diagnostics& diag, std::size_t lineNo)
 		{
 			auto& g = s.global;
 			if (key == "version") {
@@ -190,11 +208,13 @@ namespace mj::config
 					diag.push_back("[General] LogLevel not recognised (trace|debug|info|warn|error|off); keeping " + std::string(ToString(g.logLevel)));
 				}
 			} else {
-				diag.push_back("[General] unknown key ignored: " + SafeName(key));
+				diag.push_back("line " + std::to_string(lineNo) + ": unknown key in [General] ignored");
+				return false;
 			}
+			return true;
 		}
 
-		void ApplyFeature(Features& f, const std::string& key, std::string_view value, Diagnostics& diag)
+		bool ApplyFeature(Features& f, const std::string& key, std::string_view value, Diagnostics& diag, std::size_t lineNo)
 		{
 			bool* target = nullptr;
 			if (key == "retarget") target = &f.retarget;
@@ -203,8 +223,8 @@ namespace mj::config
 			else if (key == "flac") target = &f.flac;
 			else if (key == "rememberplace") target = &f.rememberPlace;
 			if (!target) {
-				diag.push_back("[Features] unknown key ignored: " + SafeName(key));
-				return;
+				diag.push_back("line " + std::to_string(lineNo) + ": unknown key in [Features] ignored");
+				return false;
 			}
 			bool b = false;
 			if (ParseBool(value, b)) {
@@ -212,11 +232,13 @@ namespace mj::config
 			} else {
 				diag.push_back("[Features] " + SafeName(key) + " is not a boolean (0/1/true/false); keeping the current value");
 			}
+			return true;
 		}
 
-		void ApplyEnv(EnvironmentSetting& e, const std::string& envId, const std::string& key, std::string_view value, Diagnostics& diag)
+		bool ApplyEnv(EnvironmentSetting& e, const std::string& envId, const std::string& key, std::string_view value, Diagnostics& diag,
+			std::size_t lineNo)
 		{
-			const std::string where = "[Env:" + SafeName(envId) + "] ";
+			const std::string where = "[Env:" + EnvLabel(envId) + "] ";
 			if (key == "mode") {
 				if (!ParseMode(value, e.mode)) {
 					diag.push_back(where + "Mode not recognised (vanilla|genre|artist|playlist|query); keeping " + std::string(ToString(e.mode)));
@@ -242,8 +264,66 @@ namespace mj::config
 					diag.push_back(where + "PoolSize is not a number; keeping " + std::to_string(e.poolSize));
 				}
 			} else {
-				diag.push_back(where + "unknown key ignored: " + SafeName(key));
+				diag.push_back(where + "line " + std::to_string(lineNo) + ": unknown key ignored");
+				return false;
 			}
+			return true;
+		}
+
+		// Writes `text` to `path` (truncating) and flushes the data to disk before returning.
+		bool WriteFileDurable(const std::filesystem::path& path, const std::string& text, std::string& err)
+		{
+#if defined(_WIN32)
+			HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (h == INVALID_HANDLE_VALUE) {
+				err = "cannot create the temporary settings file, error " + std::to_string(GetLastError());
+				return false;
+			}
+			const char* p = text.data();
+			std::size_t left = text.size();
+			bool ok = true;
+			while (left > 0 && ok) {
+				const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(left, 1u << 20));
+				DWORD wrote = 0;
+				ok = WriteFile(h, p, chunk, &wrote, nullptr) && wrote > 0;
+				p += wrote;
+				left -= wrote;
+			}
+			if (!ok) {
+				err = "writing the temporary settings file failed (disk full?), error " + std::to_string(GetLastError());
+			} else if (!FlushFileBuffers(h)) {
+				err = "flushing the temporary settings file to disk failed, error " + std::to_string(GetLastError());
+				ok = false;
+			}
+			CloseHandle(h);
+			return ok;
+#else
+			int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			if (fd < 0) {
+				err = "cannot create the temporary settings file";
+				return false;
+			}
+			const char* p = text.data();
+			std::size_t left = text.size();
+			bool ok = true;
+			while (left > 0 && ok) {
+				const ssize_t w = ::write(fd, p, left);
+				if (w <= 0) {
+					ok = false;
+					break;
+				}
+				p += w;
+				left -= static_cast<std::size_t>(w);
+			}
+			if (!ok) {
+				err = "writing the temporary settings file failed (disk full?)";
+			} else if (::fsync(fd) != 0) {
+				err = "flushing the temporary settings file to disk failed";
+				ok = false;
+			}
+			::close(fd);
+			return ok;
+#endif
 		}
 
 		bool ReplaceFile(const std::filesystem::path& from, const std::filesystem::path& to, std::string& err)
@@ -433,19 +513,19 @@ namespace mj::config
 		// Environments.
 		for (auto it = s.environments.begin(); it != s.environments.end();) {
 			if (!ValidEnvId(it->first)) {
-				diag.push_back("environment '" + SafeName(it->first) + "' is not a known environment id; dropped");
+				diag.push_back("an environment entry with an unknown or reserved id was dropped");
 				it = s.environments.erase(it);
 			} else {
 				++it;
 			}
 		}
 		while (s.environments.size() > kMaxEnvironments) {
-			diag.push_back("more than " + std::to_string(kMaxEnvironments) + " environments; dropped '" + SafeName(s.environments.rbegin()->first) + "'");
+			diag.push_back("more than " + std::to_string(kMaxEnvironments) + " environments; dropped '" + EnvLabel(s.environments.rbegin()->first) + "'");
 			s.environments.erase(std::prev(s.environments.end()));
 		}
 
 		for (auto& [id, e] : s.environments) {
-			const std::string where = "environment '" + SafeName(id) + "': ";
+			const std::string where = "environment '" + EnvLabel(id) + "': ";
 			e.selector = Clean(e.selector);
 			if (e.selector.size() > kMaxTextLen) {
 				diag.push_back(where + "selector longer than " + std::to_string(kMaxTextLen) + " characters; cleared");
@@ -474,8 +554,9 @@ namespace mj::config
 		}
 	}
 
-	Settings ParseIni(std::string_view text, Diagnostics& diag)
+	Settings ParseIni(std::string_view text, Diagnostics& diag, int* recognisedKeys)
 	{
+		int recognised = 0;
 		Settings s = DefaultSettings();
 		if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB &&
 			static_cast<unsigned char>(text[2]) == 0xBF) {
@@ -514,13 +595,13 @@ namespace mj::config
 					envId = NormalizeEnvId(name.substr(4));
 					envOk = ValidEnvId(envId);
 					if (!envOk) {
-						diag.push_back("line " + std::to_string(lineNo) + ": section [Env:" + SafeName(envId) + "] is not a known environment; ignored");
+						diag.push_back("line " + std::to_string(lineNo) + ": [Env:...] section is not a known environment; ignored");
 					} else if (!s.environments.contains(envId)) {
 						s.environments.emplace(envId, EnvironmentSetting{});
 					}
 				} else {
 					sec = Sec::Unknown;
-					diag.push_back("line " + std::to_string(lineNo) + ": unknown section [" + SafeName(name) + "] ignored");
+					diag.push_back("line " + std::to_string(lineNo) + ": unknown section ignored");
 				}
 				continue;
 			}
@@ -532,11 +613,11 @@ namespace mj::config
 			const std::string key = Lower(Trim(line.substr(0, eq)));
 			const std::string_view value = Trim(line.substr(eq + 1));
 			switch (sec) {
-			case Sec::General: ApplyGeneral(s, key, value, diag); break;
-			case Sec::Features: ApplyFeature(s.global.features, key, value, diag); break;
+			case Sec::General: recognised += ApplyGeneral(s, key, value, diag, lineNo) ? 1 : 0; break;
+			case Sec::Features: recognised += ApplyFeature(s.global.features, key, value, diag, lineNo) ? 1 : 0; break;
 			case Sec::Env:
 				if (envOk) {
-					ApplyEnv(s.environments[envId], envId, key, value, diag);
+					recognised += ApplyEnv(s.environments[envId], envId, key, value, diag, lineNo) ? 1 : 0;
 				}
 				break;
 			case Sec::None:
@@ -546,6 +627,9 @@ namespace mj::config
 			}
 		}
 		Sanitize(s, diag);
+		if (recognisedKeys) {
+			*recognisedKeys = recognised;
+		}
 		return s;
 	}
 
@@ -650,6 +734,7 @@ namespace mj::config
 
 	bool SettingsStore::Load()
 	{
+		std::lock_guard saveLk(saveMutex_);  // Load and Save never interleave their file operations
 		std::error_code ec;
 		std::filesystem::path tmp = iniPath_;
 		tmp += ".tmp";
@@ -660,34 +745,56 @@ namespace mj::config
 
 		Diagnostics diag;
 		Settings loaded = DefaultSettings();
-		bool readOk = true;
+		bool usable = true;
+		bool unusableExisting = false;
 
-		if (!std::filesystem::exists(iniPath_, ec)) {
+		ec.clear();
+		const bool exists = std::filesystem::exists(iniPath_, ec);
+		if (ec) {
+			// Not "no file": we cannot tell, so never treat it as absent.
+			Log(spdlog::level::err, "cannot tell whether the settings file exists (" + ec.message() + "); using defaults, the file will be preserved");
+			usable = false;
+			unusableExisting = true;
+		} else if (!exists) {
 			Log(spdlog::level::info, "no settings file yet; using defaults (nothing is written until a setting changes)");
 		} else {
 			std::ifstream in(iniPath_, std::ios::binary);
 			if (!in) {
-				Log(spdlog::level::err, "settings file exists but could not be opened; using defaults");
-				readOk = false;
+				Log(spdlog::level::err, "settings file exists but could not be opened; using defaults, the file will be preserved");
+				usable = false;
+				unusableExisting = true;
 			} else {
 				std::ostringstream ss;
 				ss << in.rdbuf();
 				if (in.bad()) {
-					Log(spdlog::level::err, "settings file could not be read completely; using defaults");
-					readOk = false;
+					Log(spdlog::level::err, "settings file could not be read completely; using defaults, the file will be preserved");
+					usable = false;
+					unusableExisting = true;
 				} else {
-					loaded = ParseIni(ss.str(), diag);
+					const std::string text = ss.str();
+					int recognised = 0;
+					loaded = ParseIni(text, diag, &recognised);
+					if (recognised == 0) {
+						Log(spdlog::level::err, "settings file has no recognisable setting (empty, zero-filled, UTF-16 or not our file); using "
+												"defaults, the original is kept as <ini>.unreadable on the next save");
+						loaded = DefaultSettings();
+						diag.clear();
+						usable = false;
+						unusableExisting = true;
+					}
 				}
 			}
 		}
 		for (const auto& d : diag) {
 			Log(spdlog::level::warn, d);
 		}
+		loadUnusable_ = unusableExisting;
+		bakDone_ = false;
 		{
 			std::lock_guard lk(mutex_);
 			Publish(std::move(loaded));
 		}
-		return readOk;
+		return usable;
 	}
 
 	bool SettingsStore::Save(std::string* error)
@@ -711,26 +818,54 @@ namespace mj::config
 				return fail("cannot create the settings folder: " + ec.message());
 			}
 		}
+
+		// Keep what is on disk before replacing it.
+		ec.clear();
+		const bool isFile = std::filesystem::is_regular_file(iniPath_, ec);
+		if (isFile && (loadUnusable_ || !bakDone_)) {
+			std::filesystem::path dest;
+			if (loadUnusable_) {
+				// The file was unusable at Load: preserve the original bytes under a name that never overwrites anything.
+				dest = iniPath_;
+				dest += ".unreadable";
+				for (int n = 1; std::filesystem::exists(dest, ec) && n < 1000; ++n) {
+					dest = iniPath_;
+					dest += ".unreadable." + std::to_string(n);
+				}
+			} else {
+				dest = iniPath_;
+				dest += ".bak";  // previous GOOD file: replacing an older good backup is fine
+			}
+			std::filesystem::copy_file(iniPath_, dest, std::filesystem::copy_options::overwrite_existing, ec);
+			if (ec) {
+				return fail(std::string(loadUnusable_ ? "refusing to overwrite a settings file that could not be read: preserving it failed ("
+													  : "could not keep a backup of the previous settings file (") +
+							ec.message() + ")");
+			}
+			Log(spdlog::level::info, std::string("previous settings file kept as ") + dest.filename().string());
+			loadUnusable_ = false;
+			bakDone_ = true;
+		} else if (loadUnusable_ && !isFile) {
+			// Unusable because we could not even stat it (or it is a directory): do not write over the unknown.
+			ec.clear();
+			if (std::filesystem::exists(iniPath_, ec) || ec) {
+				return fail("refusing to overwrite a settings path that could not be inspected");
+			}
+			loadUnusable_ = false;
+		}
+
 		std::filesystem::path tmp = iniPath_;
 		tmp += ".tmp";
-		{
-			std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-			if (!out) {
-				return fail("cannot create the temporary settings file");
-			}
-			out.write(text.data(), static_cast<std::streamsize>(text.size()));
-			out.flush();
-			if (!out) {
-				out.close();
-				std::filesystem::remove(tmp, ec);
-				return fail("writing the temporary settings file failed (disk full?)");
-			}
-		}
 		std::string why;
+		if (!WriteFileDurable(tmp, text, why)) {
+			std::filesystem::remove(tmp, ec);
+			return fail(why);
+		}
 		if (!ReplaceFile(tmp, iniPath_, why)) {
 			std::filesystem::remove(tmp, ec);
 			return fail(why);
 		}
+		bakDone_ = true;
 		return true;
 	}
 }

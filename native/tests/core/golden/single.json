@@ -5,11 +5,9 @@
     "rate": 44100
   },
   "normalize": true,
+  "sources": "library",
   "types": {
     "combat": {
-      "genre": "Metal"
-    },
-    "default": {
       "genre": "Metal"
     }
   }

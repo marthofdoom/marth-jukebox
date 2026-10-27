@@ -60,14 +60,19 @@ namespace
 		return e;
 	}
 
-	void CheckCommon(const json& j)
+	// libraryOnly: no environment allows streaming => profile-level sources "library"; else omitted.
+	void CheckCommon(const json& j, bool libraryOnly)
 	{
 		MJ_CHECK(j.at("normalize") == true);
 		MJ_CHECK(j.at("format") == json::parse(R"({"rate":44100,"bits":16,"channels":2})"));
-		MJ_CHECK(!j.contains("sources"));
 		MJ_CHECK(!j.at("format").contains("container"));
-		MJ_CHECK(j.at("types").contains("default"));
+		MJ_CHECK(!j.at("types").contains("default"));  // no generated fallback type
 		MJ_CHECK(j.at("types").size() <= kMaxTypes);
+		if (libraryOnly) {
+			MJ_CHECK(j.contains("sources") && j.at("sources") == "library");
+		} else {
+			MJ_CHECK(!j.contains("sources"));
+		}
 	}
 }
 
@@ -94,12 +99,11 @@ MJ_TEST(Profile_GoldenBasicMix)
 	const auto out = BuildHarmonyProfile(s, &p);
 	MJ_CHECK_MSG(p.empty(), ProblemsText(p));
 	const auto j = json::parse(out);
-	CheckCommon(j);
-	MJ_CHECK(j["types"].size() == 6);  // 5 active + default
+	CheckCommon(j, false);  // dungeon / boss allow streaming
+	MJ_CHECK(j["types"].size() == 5);
 	MJ_CHECK(!j["types"].contains("town"));
 	MJ_CHECK(j["types"]["explore"] == json::parse(R"({"genre":"Ambient"})"));
 	MJ_CHECK(j["types"]["dungeon"] == json::parse(R"({"artist":{"service":"ytmusic","id":"UC1234567890abcdefghij"}})"));
-	MJ_CHECK(j["types"]["default"].is_array());
 	CheckGolden("basic_mix.json", out);
 	MJ_CHECK(BuildHarmonyProfile(s) == out);  // deterministic
 }
@@ -117,21 +121,21 @@ MJ_TEST(Profile_GoldenSubEnvironmentsAndOtherMods)
 	const auto out = BuildHarmonyProfile(s, &p);
 	MJ_CHECK_MSG(p.empty(), ProblemsText(p));
 	const auto j = json::parse(out);
-	CheckCommon(j);
+	CheckCommon(j, true);
 	MJ_CHECK(j["types"].contains("explore.tundra") && j["types"].contains("other.WTMUSExplore"));
 	MJ_CHECK(!j["types"].contains("explore.snow"));
-	MJ_CHECK(j["types"]["default"].size() == 3);
 	MJ_CHECK(out.find("SEKRET") == std::string::npos && out.find("harmony:8080") == std::string::npos);
 	CheckGolden("sub_envs.json", out);
 }
 
-MJ_TEST(Profile_GoldenSingleEnvironmentDefaultIsObject)
+MJ_TEST(Profile_GoldenSingleEnvironment)
 {
 	Settings s;
 	s.environments["combat"] = Env(Mode::Genre, "Metal");
 	const auto out = BuildHarmonyProfile(s);
 	const auto j = json::parse(out);
-	MJ_CHECK(j["types"]["default"] == j["types"]["combat"]);
+	CheckCommon(j, true);
+	MJ_CHECK(j["types"].size() == 1);
 	CheckGolden("single.json", out);
 }
 
@@ -153,21 +157,19 @@ MJ_TEST(Profile_ValidationFailuresAreReportedPerEnvironment)
 	std::vector<ProfileProblem> p;
 	const auto out = BuildHarmonyProfile(s, &p);
 	const auto j = json::parse(out);
-	CheckCommon(j);
+	CheckCommon(j, true);
 
 	auto has = [&](const std::string& env, ProblemSeverity sev) {
 		return std::any_of(p.begin(), p.end(), [&](const ProfileProblem& x) { return x.environment == env && x.severity == sev; });
 	};
 	for (const char* e : { "combat", "boss", "dungeon", "town", "discovery", "stinger", "special", "bad name!", "default" }) {
 		MJ_CHECK_MSG(has(e, ProblemSeverity::Error), e);
-		MJ_CHECK_MSG(!j["types"].contains(e) || std::string(e) == "default", e);
+		MJ_CHECK_MSG(!j["types"].contains(e), e);
 	}
 	MJ_CHECK(has("tavern", ProblemSeverity::Warning) && j["types"].contains("tavern"));
 	MJ_CHECK(has("story", ProblemSeverity::Warning) && j["types"].contains("story"));
 	MJ_CHECK(!has("explore", ProblemSeverity::Error) && j["types"].contains("explore"));
 	MJ_CHECK(p.size() == 11);
-	// "default" must be the generated union, never the user's reserved entry.
-	MJ_CHECK(j["types"]["default"].is_array());
 	CheckGolden("validation_failures.json", out);
 	CheckGolden("validation_failures.problems.txt", ProblemsText(p));
 
@@ -199,9 +201,9 @@ MJ_TEST(Profile_TextLimitsAreInCodePointsNotBytes)
 	MJ_CHECK(!BuildHarmonyProfile(s, &p).empty() && p.empty());
 }
 
-MJ_TEST(Profile_LimitsOnTypesAndDefaultSelectors)
+MJ_TEST(Profile_LimitOnTypes)
 {
-	// 70 environments: Harmony allows 64 types including default => 63 kept.
+	// 70 environments: Harmony allows 64 types => 64 kept.
 	Settings s;
 	for (int i = 0; i < 70; ++i) {
 		char name[16];
@@ -212,17 +214,51 @@ MJ_TEST(Profile_LimitsOnTypesAndDefaultSelectors)
 	const auto out = BuildHarmonyProfile(s, &p);
 	const auto j = json::parse(out);
 	MJ_CHECK(j["types"].size() == kMaxTypes);
-	MJ_CHECK(std::count_if(p.begin(), p.end(), [](const ProfileProblem& x) { return x.severity == ProblemSeverity::Error; }) == 7);
-	// The default type carries at most 16 selectors (63 distinct exist) and says so.
-	MJ_CHECK(j["types"]["default"].is_array() && j["types"]["default"].size() == kMaxSelectorsPerType);
-	MJ_CHECK(std::any_of(p.begin(), p.end(), [](const ProfileProblem& x) { return x.environment.empty() && x.severity == ProblemSeverity::Warning; }));
+	MJ_CHECK(std::count_if(p.begin(), p.end(), [](const ProfileProblem& x) { return x.severity == ProblemSeverity::Error; }) == 6);
+}
 
-	// Identical selectors collapse in the default type.
-	Settings d;
-	d.environments["explore"] = Env(Mode::Genre, "Ambient");
-	d.environments["town"] = Env(Mode::Genre, "Ambient");
-	const auto jd = json::parse(BuildHarmonyProfile(d));
-	MJ_CHECK(jd["types"]["default"].is_object());
+MJ_TEST(Profile_StreamingOmitsProfileSources)
+{
+	Settings s;
+	s.environments["explore"] = Env(Mode::Genre, "Ambient");
+	MJ_CHECK(json::parse(BuildHarmonyProfile(s)).at("sources") == "library");
+	s.environments["combat"] = Env(Mode::Genre, "Metal", "", "", true);
+	MJ_CHECK(!json::parse(BuildHarmonyProfile(s)).contains("sources"));
+}
+
+MJ_TEST(Profile_ResolveEnvironmentFollowsBuilderErrors)
+{
+	Settings s;
+	s.environments["explore"] = Env(Mode::Genre, "Ambient");
+	s.environments["explore.tundra"] = Env(Mode::Genre, std::string(201, 'x'));  // Error: left out
+	s.environments["combat"] = Env(Mode::Artist, "A", "qobuz", "1");              // Error: left out
+	s.environments["boss"] = Env(Mode::Artist, "A", "ytmusic", "UCabc");          // Warning only: published
+	const auto build = BuildProfile(s);
+	MJ_CHECK(build.publishedTypes.contains("explore") && build.publishedTypes.contains("boss"));
+	MJ_CHECK(!build.publishedTypes.contains("explore.tundra") && !build.publishedTypes.contains("combat"));
+
+	// The rejected sub-environment stays Vanilla: it does NOT fall back to the group, nor to a missing type.
+	auto r = ResolveEnvironment(s, "explore", "tundra", &build);
+	MJ_CHECK(r.typeName == "explore.tundra" && r.excluded && !r.Active());
+	// Without the build the raw setting looks active (that is why callers must pass the build).
+	MJ_CHECK(ResolveEnvironment(s, "explore", "tundra").Active());
+	r = ResolveEnvironment(s, "explore", "coast", &build);  // inherits the published group
+	MJ_CHECK(r.typeName == "explore" && r.Active());
+	r = ResolveEnvironment(s, "combat", "", &build);
+	MJ_CHECK(!r.Active() && r.excluded);
+	r = ResolveEnvironment(s, "boss", "", &build);
+	MJ_CHECK(r.Active());
+	// Cross-check: every environment with an Error is inactive; every other non-Vanilla one is active.
+	for (const auto& [id, e] : s.environments) {
+		const bool errored = std::any_of(build.problems.begin(), build.problems.end(),
+			[&](const ProfileProblem& x) { return x.environment == id && x.severity == ProblemSeverity::Error; });
+		std::string g = id, sub;
+		if (const auto dot = id.find('.'); dot != std::string::npos) {
+			g = id.substr(0, dot);
+			sub = id.substr(dot + 1);
+		}
+		MJ_CHECK_MSG(ResolveEnvironment(s, g, sub, &build).Active() == !errored, id);
+	}
 }
 
 MJ_TEST(Profile_PathAndResolve)

@@ -5,24 +5,8 @@
     "rate": 44100
   },
   "normalize": true,
+  "sources": "library",
   "types": {
-    "default": [
-      {
-        "genre": "Ambient"
-      },
-      {
-        "playlist": {
-          "id": "abc",
-          "service": "local"
-        }
-      },
-      {
-        "artist": {
-          "id": "UCabc",
-          "service": "ytmusic"
-        }
-      }
-    ],
     "explore": {
       "genre": "Ambient"
     },

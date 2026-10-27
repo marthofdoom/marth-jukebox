@@ -84,6 +84,8 @@ namespace mj::categories
 	};
 
 	// Classify one music type. Thread-safe (reads constant data).
+	// `pluginName` is the ORIGIN file of the record (TESForm::GetFile(0)), not the plugin whose override wins.
+	// "other.<EDID>" environment ids (advanced list) apply only to records this returns as plain Unmapped.
 	[[nodiscard]] Classification Classify(std::string_view editorId, std::string_view pluginName,
 		const TypeHints& hints = {});
 
@@ -110,6 +112,10 @@ namespace mj::categories
 	// "other.<EDID>" for the advanced list of unmapped types. Empty when the EDID has no usable characters.
 	// Characters outside [A-Za-z0-9_-] become '_'; the result fits Harmony's type-name rules (<= 64).
 	[[nodiscard]] std::string OtherModsEnvId(std::string_view editorId);
+
+	// True when the table (any row, exact or prefix) or the known-unmapped list names this EDID, regardless of
+	// plugin. Settings refuses "other.<EDID>" for such EDIDs.
+	[[nodiscard]] bool IsTableEdid(std::string_view editorId);
 
 	// ASCII case-insensitive equality (EDIDs and plugin names compare this way).
 	[[nodiscard]] bool EqualsNoCase(std::string_view a, std::string_view b);

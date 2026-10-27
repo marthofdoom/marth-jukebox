@@ -295,6 +295,21 @@ namespace mj::categories
 			"Unmapped: not a known vanilla / official music type, so it stays vanilla (the advanced list may offer it individually)" };
 	}
 
+	bool IsTableEdid(std::string_view editorId)
+	{
+		for (const auto& r : kRules) {
+			if (r.prefix ? PrefixNoCase(editorId, r.pattern) : EqualsNoCase(editorId, r.pattern)) {
+				return true;
+			}
+		}
+		for (const auto& k : kKnownUnmapped) {
+			if (EqualsNoCase(k.edid, editorId)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	std::string EnvironmentId(std::string_view groupId, std::string_view subId)
 	{
 		std::string s(groupId);

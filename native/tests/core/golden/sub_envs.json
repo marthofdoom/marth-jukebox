@@ -5,18 +5,8 @@
     "rate": 44100
   },
   "normalize": true,
+  "sources": "library",
   "types": {
-    "default": [
-      {
-        "genre": "Ambient"
-      },
-      {
-        "genre": "Folk"
-      },
-      {
-        "query": "norse wilderness"
-      }
-    ],
     "explore": {
       "genre": "Ambient"
     },

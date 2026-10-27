@@ -115,7 +115,9 @@ namespace mj::config
 
 	// Tolerant parser: unknown sections/keys, garbage lines, BOM, CRLF, duplicate keys (last wins) and
 	// bad values are survived; each problem becomes a diagnostic line without echoing line content.
-	[[nodiscard]] Settings ParseIni(std::string_view text, Diagnostics& diag);
+	// `recognisedKeys` (optional) receives how many known keys were found: 0 for a non-empty file means the
+	// content is not one of ours (UTF-16, zero-filled, wrong file...).
+	[[nodiscard]] Settings ParseIni(std::string_view text, Diagnostics& diag, int* recognisedKeys = nullptr);
 
 	// Stable, human-editable INI. Environments sorted by id. Carries the plain-text key warning.
 	[[nodiscard]] std::string SerializeIni(const Settings& s);
@@ -144,12 +146,16 @@ namespace mj::config
 		SettingsStore(std::filesystem::path iniPath, std::filesystem::path defaultCacheDir);
 
 		// Reads the INI (missing file = defaults, nothing is created). Publishes a new snapshot.
-		// A stale "<ini>.tmp" from a crashed save is ignored and removed. Returns false only when
-		// the file exists but could not be read (defaults are published anyway).
+		// A stale "<ini>.tmp" from a crashed save is ignored and removed. Returns false when the file exists
+		// but could not be used: unreadable, or content with no recognised key (empty, zero-filled, UTF-16...).
+		// Defaults are published anyway, and the NEXT Save first preserves the original bytes in
+		// "<ini>.unreadable[.N]" (it refuses to save if that copy fails), so a bad read can never destroy
+		// the user's INI or personal key.
 		bool Load();
 
-		// Atomically writes the current snapshot: "<ini>.tmp" then replace. False + message on failure
-		// (the old file is left intact).
+		// Atomically writes the current snapshot: "<ini>.tmp" (flushed to disk), then replace. False + message
+		// on failure (the old file is left intact). The first Save of a session also keeps the previous good
+		// file as "<ini>.bak".
 		bool Save(std::string* error = nullptr);
 
 		// Immutable view; cheap. A worker keeps its pointer as long as it likes.
@@ -160,6 +166,7 @@ namespace mj::config
 
 		// Copy-on-write edit: copies the current snapshot, runs `edit`, sanitizes (logging corrections),
 		// publishes, returns the new revision. Concurrent Update calls serialize; none is lost.
+		// `edit` runs under the store's lock: it must NOT call back into this store (Snapshot/Update/...).
 		std::uint64_t Update(const std::function<void(Settings&)>& edit);
 
 		std::uint64_t ResetToDefaults();
@@ -177,6 +184,8 @@ namespace mj::config
 		mutable std::mutex                 mutex_;  // guards current_ and revision generation
 		std::shared_ptr<const Settings>    current_;
 		std::atomic<std::uint64_t>         revision_{ 0 };
-		std::mutex                         saveMutex_;  // one writer of the file at a time
+		std::mutex                         saveMutex_;  // one file operation at a time (Load and Save); locked before mutex_
+		bool                               loadUnusable_ = false;  // guarded by saveMutex_: last Load found an unusable existing file
+		bool                               bakDone_      = false;  // guarded by saveMutex_: previous good file already kept this session
 	};
 }

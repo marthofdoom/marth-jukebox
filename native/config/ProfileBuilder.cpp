@@ -164,7 +164,8 @@ namespace mj::config
 		return "/api/game/profiles/" + settings.global.harmonyProfileName;
 	}
 
-	EffectiveEnvironment ResolveEnvironment(const Settings& settings, std::string_view groupId, std::string_view subId)
+	EffectiveEnvironment ResolveEnvironment(const Settings& settings, std::string_view groupId, std::string_view subId,
+		const ProfileBuild* build)
 	{
 		EffectiveEnvironment r;
 		if (!subId.empty()) {
@@ -172,25 +173,31 @@ namespace mj::config
 			if (const auto* s = settings.Find(subName)) {
 				r.typeName = subName;
 				r.setting = s;
-				return r;
 			}
 		}
-		if (const auto* g = settings.Find(groupId)) {
-			r.typeName = std::string(groupId);
-			r.setting = g;
+		if (!r.setting) {
+			if (const auto* g = settings.Find(groupId)) {
+				r.typeName = std::string(groupId);
+				r.setting = g;
+			}
+		}
+		// An environment the builder left out (Error) is not in the Harmony profile: it stays Vanilla.
+		if (build && r.setting && r.setting->mode != Mode::Vanilla && !build->publishedTypes.contains(r.typeName)) {
+			r.excluded = true;
 		}
 		return r;
 	}
 
-	std::string BuildHarmonyProfile(const Settings& settings, std::vector<ProfileProblem>* problems)
+	ProfileBuild BuildProfile(const Settings& settings)
 	{
-		const Ctx ctx{ problems };
+		ProfileBuild out;
+		const Ctx ctx{ &out.problems };
 		json types = json::object();
-		std::vector<json> defaults;
+		bool anyStreaming = false;
 
 		if (!ValidTypeName(settings.global.harmonyProfileName)) {
 			ctx.Add("", ProblemSeverity::Error, "profile name is invalid; nothing to publish");
-			return {};
+			return out;
 		}
 
 		for (const auto& [id, e] : settings.environments) {
@@ -199,45 +206,51 @@ namespace mj::config
 			}
 			if (!ValidTypeName(id) || id == "default") {
 				ctx.Add(id, ProblemSeverity::Error,
-					id == "default" ? "'default' is reserved for the generated fallback type; left out of the profile"
+					id == "default" ? "'default' is reserved; left out of the profile"
 									: "environment id is not a valid Harmony type name; left out of the profile");
 				continue;
 			}
-			if (types.size() + 1 >= kMaxTypes) {  // keep one slot for "default"
+			if (types.size() >= kMaxTypes) {
 				ctx.Add(id, ProblemSeverity::Error, "too many environments for one Harmony profile (limit " + std::to_string(kMaxTypes) +
-													   " including default); left out of the profile");
+													   "); left out of the profile");
 				continue;
 			}
 			json sel;
 			if (!BuildSelector(id, e, sel, ctx)) {
 				continue;
 			}
-			if (std::find(defaults.begin(), defaults.end(), sel) == defaults.end()) {
-				defaults.push_back(sel);
-			}
+			anyStreaming = anyStreaming || e.allowStreaming;
 			types[id] = std::move(sel);
+			out.publishedTypes.insert(id);
 		}
 
 		if (types.empty()) {
-			return {};
+			return out;
 		}
 
-		if (defaults.size() > kMaxSelectorsPerType) {
-			ctx.Add("", ProblemSeverity::Warning, "the default type is limited to " + std::to_string(kMaxSelectorsPerType) +
-													  " selectors; the rest are not part of the fallback");
-			defaults.resize(kMaxSelectorsPerType);
-		}
-		if (defaults.size() == 1) {
-			types["default"] = defaults.front();
-		} else {
-			types["default"] = json(defaults);
-		}
-
+		// No generated "default" type: the plugin only ever asks for published types, and a type that failed
+		// validation must stay Vanilla rather than silently play some other environment's selector.
 		json root = json::object();
 		root["types"] = std::move(types);
 		root["normalize"] = true;
 		root["format"] = json::object({ { "rate", 44100 }, { "bits", 16 }, { "channels", 2 } });
+		// Profile-level default source set: Library only unless some environment allows streaming. Every `next`
+		// call still passes `sources` explicitly (it overrides the profile's); with streaming allowed it is
+		// omitted here because an older Harmony cannot parse a list and "all" would include Qobuz.
+		if (!anyStreaming) {
+			root["sources"] = "library";
+		}
 		// Text was validated above; 'replace' only guards the odd overlong/surrogate sequence, it never throws.
-		return root.dump(2, ' ', false, json::error_handler_t::replace);
+		out.json = root.dump(2, ' ', false, json::error_handler_t::replace);
+		return out;
+	}
+
+	std::string BuildHarmonyProfile(const Settings& settings, std::vector<ProfileProblem>* problems)
+	{
+		auto b = BuildProfile(settings);
+		if (problems) {
+			problems->insert(problems->end(), b.problems.begin(), b.problems.end());
+		}
+		return std::move(b.json);
 	}
 }
