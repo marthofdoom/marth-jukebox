@@ -1,0 +1,60 @@
+{
+  "format": {
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100
+  },
+  "normalize": true,
+  "types": {
+    "boss": {
+      "playlist": {
+        "id": "PLabc_DEF-123",
+        "service": "ytmusic"
+      }
+    },
+    "combat": {
+      "query": "epic battle music orchestral"
+    },
+    "default": [
+      {
+        "playlist": {
+          "id": "PLabc_DEF-123",
+          "service": "ytmusic"
+        }
+      },
+      {
+        "query": "epic battle music orchestral"
+      },
+      {
+        "artist": {
+          "id": "UC1234567890abcdefghij",
+          "service": "ytmusic"
+        }
+      },
+      {
+        "genre": "Ambient"
+      },
+      {
+        "artist": {
+          "id": "9f2c1ab04d77e310",
+          "service": "local"
+        }
+      }
+    ],
+    "dungeon": {
+      "artist": {
+        "id": "UC1234567890abcdefghij",
+        "service": "ytmusic"
+      }
+    },
+    "explore": {
+      "genre": "Ambient"
+    },
+    "stinger": {
+      "artist": {
+        "id": "9f2c1ab04d77e310",
+        "service": "local"
+      }
+    }
+  }
+}

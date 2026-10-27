@@ -25,3 +25,6 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h)
 target_compile_options(${PROJECT_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Zi>)
 target_link_options(${PROJECT_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG /OPT:REF /OPT:ICF>)
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Pure-C++ core (environment map, settings, profile builder) and its tests.
+include(${CMAKE_CURRENT_SOURCE_DIR}/core.cmake)

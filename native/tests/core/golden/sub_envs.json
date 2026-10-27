@@ -1,0 +1,30 @@
+{
+  "format": {
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100
+  },
+  "normalize": true,
+  "types": {
+    "default": [
+      {
+        "genre": "Ambient"
+      },
+      {
+        "genre": "Folk"
+      },
+      {
+        "query": "norse wilderness"
+      }
+    ],
+    "explore": {
+      "genre": "Ambient"
+    },
+    "explore.tundra": {
+      "genre": "Folk"
+    },
+    "other.WTMUSExplore": {
+      "query": "norse wilderness"
+    }
+  }
+}
