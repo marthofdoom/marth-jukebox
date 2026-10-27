@@ -350,9 +350,9 @@ namespace MJ::Menu
 				// The selector is ALWAYS a plain typed text field (marth 2026-10-27): genre, artist or playlist name, or search words.
 				auto& field = s.queryText[a_row.id];
 				field.SyncFromStore(own ? own->selector : std::string{});
-				const char* hint = curMode == Mode::Genre ? "type a genre, e.g. Ambient"
-					: curMode == Mode::Artist ? "type an artist name"
-					: curMode == Mode::Playlist ? "type a playlist name" : "e.g. calm piano";
+				const char* hint = curMode == Mode::Genre ? "type a genre, e.g. ambient"
+					: curMode == Mode::Artist ? "type an artist name, e.g. Hans Zimmer"
+					: curMode == Mode::Playlist ? "type a playlist name" : "e.g. epic battle music";
 				UI::SetNextItemWidth(420.0f);
 				if (EditText("Text##selector", hint, field.edit, 800) && ModeNeedsSearch(curMode)) {
 					s.searchEnv = a_row.id;

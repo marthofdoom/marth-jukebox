@@ -188,6 +188,7 @@ namespace MJ::Menu
 		const char* envId;
 		Mode        mode;
 		const char* selector;
+		bool        streaming = false;  // the preset turns AllowStreaming on for exactly this environment (the user's explicit consent)
 	};
 	struct Preset
 	{
@@ -203,6 +204,8 @@ namespace MJ::Menu
 	bool ApplyPreset(Settings& a_settings, std::string_view a_presetId);
 	// Genre selectors of the preset that are NOT in `a_genres` (a genre-browse result from the server). Empty list given
 	// = nothing known = nothing reported.
+	[[nodiscard]] bool PresetUsesStreaming(const Preset& a_preset);
+	// Only library presets are checked: a streaming preset (YouTube Music) cannot be validated against the library's genres.
 	[[nodiscard]] std::vector<std::string> MissingPresetGenres(const Preset& a_preset, const std::vector<App::SearchHit>& a_genres);
 
 	// ---- first run --------------------------------------------------------------------------------------

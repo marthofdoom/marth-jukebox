@@ -417,17 +417,22 @@ namespace MJ::Menu
 
 	const std::vector<Preset>& Presets()
 	{
-		// Genre selectors only. The names are genres that exist in the live Harmony library (checked 2026-10-27: Soundtrack,
-		// Orchestral, Symphony, Folk, Solo Piano, Choral...). Libraries differ, so the page also checks them against the
-		// server's genre list when it has one (MissingPresetGenres) and tells the user which are absent.
+		// Designed for the streaming case (marth 2026-10-27: his library is small): the streaming presets use a genre and
+		// queries that returned YouTube Music tracks through Harmony ('ambient', 'epic battle music orchestral'). They say
+		// so in the label, and they alone turn AllowStreaming on, only for the environments they fill (applying one is the
+		// user's explicit consent). "Folk journey" stays on the library ('Folk' exists there) and enables nothing.
 		static const std::vector<Preset> kPresets = {
-			{ "calm_epic", "Calm exploration + epic combat",
-			  "Soundtrack music while travelling, orchestral music in fights and boss battles.",
-			  { { "explore", Mode::Genre, "Soundtrack" },
-				{ "combat", Mode::Genre, "Orchestral" },
-				{ "boss", Mode::Genre, "Orchestral" } } },
-			{ "folk_journey", "Folk journey",
-			  "Folk music on the road and in towns, symphonic music underground.",
+			{ "calm_epic", "Calm exploration + epic combat (YouTube Music)",
+			  "Ambient music while travelling, epic orchestral battle music in fights and boss battles. "
+			  "Turns on streaming (YouTube Music) for those environments.",
+			  { { "explore", Mode::Genre, "ambient", true },
+				{ "combat", Mode::Query, "epic battle music orchestral", true },
+				{ "boss", Mode::Query, "epic battle music orchestral", true } } },
+			{ "dark_depths", "Dark dungeons (YouTube Music)",
+			  "Dark ambient music in dungeons. Turns on streaming (YouTube Music) for dungeons.",
+			  { { "dungeon", Mode::Query, "dark ambient dungeon synth", true } } },
+			{ "folk_journey", "Folk journey (library only)",
+			  "Folk music on the road and in towns, symphonic music underground, all from your own library. No streaming.",
 			  { { "explore", Mode::Genre, "Folk" },
 				{ "town", Mode::Genre, "Folk" },
 				{ "dungeon", Mode::Genre, "Symphony" } } },
@@ -438,6 +443,11 @@ namespace MJ::Menu
 		return kPresets;
 	}
 
+	bool PresetUsesStreaming(const Preset& a_preset)
+	{
+		return std::any_of(a_preset.entries.begin(), a_preset.entries.end(), [](const PresetEntry& e) { return e.streaming; });
+	}
+
 	std::vector<std::string> MissingPresetGenres(const Preset& a_preset, const std::vector<App::SearchHit>& a_genres)
 	{
 		std::vector<std::string> missing;
@@ -445,7 +455,7 @@ namespace MJ::Menu
 			return missing;  // no list to compare against: say nothing
 		}
 		for (const auto& entry : a_preset.entries) {
-			if (entry.mode != Mode::Genre) {
+			if (entry.mode != Mode::Genre || entry.streaming) {
 				continue;
 			}
 			bool found = false;
@@ -503,6 +513,7 @@ namespace MJ::Menu
 			e.mode = entry.mode;
 			ClearSelection(e);
 			e.selector = entry.selector;
+			e.allowStreaming = entry.streaming;  // true only for the environments a streaming preset fills
 		}
 		return true;
 	}

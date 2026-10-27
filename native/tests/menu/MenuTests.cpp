@@ -342,8 +342,9 @@ MJ_TEST(Presets_AllEntriesAreValidGenreEnvironments)
 		MJ_CHECK(p.label && *p.label);
 		for (const auto& e : p.entries) {
 			MJ_CHECK(mj::categories::IsKnownEnvironmentId(e.envId));
-			MJ_CHECK(e.mode == Mode::Genre);
+			MJ_CHECK(e.mode == Mode::Genre || e.mode == Mode::Query);
 			MJ_CHECK(ValidateSelectorText(e.selector).ok);
+			MJ_CHECK(!e.streaming || PresetUsesStreaming(p));
 		}
 	}
 }
@@ -360,11 +361,12 @@ MJ_TEST(Presets_ApplySetsFieldsOnlyAndDropsSubOverrides)
 	s.global.personalKey = "k";
 
 	MJ_CHECK(ApplyPreset(s, "calm_epic"));
-	MJ_CHECK(s.Find("explore")->mode == Mode::Genre && s.Find("explore")->selector == "Soundtrack");
-	MJ_CHECK(s.Find("combat")->mode == Mode::Genre && s.Find("combat")->selector == "Orchestral");
-	MJ_CHECK(s.Find("boss")->selector == "Orchestral");
+	MJ_CHECK(s.Find("explore")->mode == Mode::Genre && s.Find("explore")->selector == "ambient");
+	MJ_CHECK(s.Find("combat")->mode == Mode::Query && s.Find("combat")->selector == "epic battle music orchestral");
+	MJ_CHECK(s.Find("boss")->selector == "epic battle music orchestral");
+	MJ_CHECK(s.Find("explore")->allowStreaming && s.Find("combat")->allowStreaming && s.Find("boss")->allowStreaming);
+	MJ_CHECK(s.Find("town")->allowStreaming == false);  // streaming only where the preset fills
 	MJ_CHECK(s.Find("explore.snow") == nullptr);
-	MJ_CHECK(s.Find("explore")->allowStreaming);           // flags untouched
 	MJ_CHECK(s.Find("combat")->poolSize == 5);             // new entries follow the pool size
 	MJ_CHECK(s.Find("town")->selector == "Jazz");          // not in the preset
 	MJ_CHECK(s.global.serverUrl == "http://h:1" && s.global.personalKey == "k");  // only environments change
@@ -468,16 +470,31 @@ MJ_TEST(Edit_PoolSizeOnFreshSetupPersistsAndIsInherited)
 	MJ_CHECK(s.Find("explore")->mode == Mode::Vanilla);
 }
 
-MJ_TEST(Presets_MissingGenresAgainstServerList)
+MJ_TEST(Presets_MissingGenresOnlyForLibraryPresets)
 {
-	const auto* p = FindPreset("calm_epic");
-	MJ_CHECK(p != nullptr);
+	const auto* p = FindPreset("folk_journey");
+	MJ_CHECK(p != nullptr && !PresetUsesStreaming(*p));
 	MJ_CHECK(MissingPresetGenres(*p, {}).empty());  // no list known: nothing reported
-	std::vector<MJ::App::SearchHit> genres = { Hit("genre", "local", "soundtrack", "Soundtrack"), Hit("genre", "local", "Folk", "Folk") };
+	std::vector<MJ::App::SearchHit> genres = { Hit("genre", "local", "folk", "Folk") };
 	const auto missing = MissingPresetGenres(*p, genres);
-	MJ_CHECK(missing.size() == 1 && missing[0] == "Orchestral");  // case-insensitive match; listed once
-	genres.push_back(Hit("genre", "local", "Orchestral", "Orchestral"));
+	MJ_CHECK(missing.size() == 1 && missing[0] == "Symphony");  // case-insensitive match; listed once
+	genres.push_back(Hit("genre", "local", "Symphony", "Symphony"));
 	MJ_CHECK(MissingPresetGenres(*p, genres).empty());
+	const auto* e = FindPreset("calm_epic");
+	MJ_CHECK(e != nullptr && PresetUsesStreaming(*e));
+	MJ_CHECK(MissingPresetGenres(*e, genres).empty());  // streaming preset: not validated against the library
+}
+
+MJ_TEST(Presets_StreamingOnlyWhereAStreamingPresetFills)
+{
+	auto s = mj::config::DefaultSettings();
+	ApplyPreset(s, "folk_journey");
+	for (const auto& [id, en] : s.environments) MJ_CHECK_MSG(!en.allowStreaming, id);  // library preset enables nothing
+	ApplyPreset(s, "dark_depths");
+	MJ_CHECK(s.Find("dungeon")->allowStreaming && s.Find("dungeon")->mode == Mode::Query);
+	MJ_CHECK(!s.Find("explore")->allowStreaming);
+	ApplyPreset(s, "folk_journey");  // refilling dungeon from the library switches its streaming back off
+	MJ_CHECK(!s.Find("dungeon")->allowStreaming);
 }
 
 MJ_TEST(Hits_SuggestionsAreCapped)
@@ -584,7 +601,7 @@ MJ_TEST(StoreFlow_EditSaveApply)
 	mj::config::SettingsStore reloaded(ini, dir.Path() / "cache");
 	MJ_CHECK(reloaded.Load());
 	const auto snap = reloaded.Snapshot();
-	MJ_CHECK(snap->Find("explore") && snap->Find("explore")->selector == "Soundtrack");
+	MJ_CHECK(snap->Find("explore") && snap->Find("explore")->selector == "ambient");
 	MJ_CHECK(snap->global.serverUrl == "http://127.0.0.1:8080");
 	MJ_CHECK(snap->global.personalKey == secret);
 	MJ_CHECK(q.LastError().find(secret) == std::string::npos);
