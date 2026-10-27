@@ -40,7 +40,7 @@ jobs:
           restore-keys: vcpkg-
 
       - name: Configure
-        run: cmake --preset release
+        run: cmake --preset release -DMJ_BUILD_TESTS=ON
         env:
           VCPKG_ROOT: C:\vcpkg
 
@@ -64,6 +64,7 @@ jobs:
           path: |
             native/build/release/MarthJukebox.dll
             native/build/release/MarthJukebox.pdb
+            native/build/release/mj_net_tests.exe
           if-no-files-found: error
 
       # Pure-C++ core tests (native/core.cmake): reconfigure the same tree with the option, build only the
@@ -78,3 +79,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
         env:
           VCPKG_ROOT: C:\vcpkg
+      # Network client tests: a console exe with an in-process 127.0.0.1 HTTP server. Never
+      # touches a real Harmony. A non-zero exit (any failed check) fails the job.
+      - name: Run net tests
+        run: .\build\release\mj_net_tests.exe
+
+      # The same tests built with MSVC AddressSanitizer, in a separate build dir. Non-blocking
+      # (continue-on-error) until it has proven itself; the result is read from the run log.
+      - name: Build net tests (ASan, non-blocking)
+        continue-on-error: true
+        run: |
+          cmake --preset release -B build/asan -DMJ_BUILD_TESTS=ON -DMJ_TESTS_ASAN=ON
+          cmake --build build/asan --target mj_net_tests
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      - name: Run net tests (ASan, non-blocking)
+        continue-on-error: true
+        run: .\build\asan\mj_net_tests.exe
