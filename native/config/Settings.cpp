@@ -203,6 +203,27 @@ namespace mj::config
 				} else {
 					diag.push_back("[General] CacheCapMB is not a number; keeping " + std::to_string(g.cacheCapMB));
 				}
+			} else if (key == "allowqobuz") {
+				bool b = false;
+				if (ParseBool(value, b)) {
+					g.allowQobuz = b;
+				} else {
+					diag.push_back("[General] AllowQobuz is not a boolean (0/1/true/false); keeping " + std::to_string(g.allowQobuz ? 1 : 0));
+				}
+			} else if (key == "toastenabled") {
+				bool b = false;
+				if (ParseBool(value, b)) {
+					g.toastEnabled = b;
+				} else {
+					diag.push_back("[General] ToastEnabled is not a boolean (0/1/true/false); keeping " + std::to_string(g.toastEnabled ? 1 : 0));
+				}
+			} else if (key == "toastintervalminutes") {
+				long long v = 0;
+				if (ParseInt(value, v)) {
+					g.toastIntervalMinutes = static_cast<int>(std::clamp<long long>(v, INT32_MIN / 2, INT32_MAX / 2));
+				} else {
+					diag.push_back("[General] ToastIntervalMinutes is not a number; keeping " + std::to_string(g.toastIntervalMinutes));
+				}
 			} else if (key == "loglevel") {
 				if (!ParseLogLevel(value, g.logLevel)) {
 					diag.push_back("[General] LogLevel not recognised (trace|debug|info|warn|error|off); keeping " + std::string(ToString(g.logLevel)));
@@ -480,7 +501,23 @@ namespace mj::config
 
 	std::string_view SourcesFor(const EnvironmentSetting& e)
 	{
-		return e.allowStreaming ? "all" : "library";
+		return e.allowStreaming ? "library,ytmusic" : "library";
+	}
+
+	SourcesChoice ChooseSources(const Settings& s, const EnvironmentSetting& e, bool serverAcceptsList)
+	{
+		SourcesChoice c;
+		if (!e.allowStreaming) {
+			c.sources = "library";
+		} else if (serverAcceptsList) {
+			c.sources = s.global.allowQobuz ? "library,ytmusic,qobuz" : "library,ytmusic";
+		} else if (s.global.allowQobuz) {
+			c.sources = "all";
+		} else {
+			c.sources = "library";
+			c.streamingDropped = true;
+		}
+		return c;
 	}
 
 	void Sanitize(Settings& s, Diagnostics& diag)
@@ -524,6 +561,11 @@ namespace mj::config
 			g.cacheDir.clear();
 		}
 
+		if (g.toastIntervalMinutes < kToastIntervalMinMin || g.toastIntervalMinutes > kToastIntervalMaxMin) {
+			const int fixed = std::clamp(g.toastIntervalMinutes, kToastIntervalMinMin, kToastIntervalMaxMin);
+			diag.push_back("ToastIntervalMinutes " + std::to_string(g.toastIntervalMinutes) + " out of range 1-60; using " + std::to_string(fixed));
+			g.toastIntervalMinutes = fixed;
+		}
 		if (g.cacheCapMB < kCacheCapMinMB) {
 			diag.push_back("CacheCapMB " + std::to_string(g.cacheCapMB) + " below the minimum; using " + std::to_string(kCacheCapMinMB));
 			g.cacheCapMB = kCacheCapMinMB;
@@ -676,6 +718,12 @@ namespace mj::config
 		  << "CacheCapMB=" << g.cacheCapMB << "\n"
 		  << "; trace | debug | info | warn | error | off\n"
 		  << "LogLevel=" << ToString(g.logLevel) << "\n"
+		  << "; 1 = streaming environments may also use Qobuz (off by default: without a subscription Qobuz serves 30 s previews).\n"
+		  << "AllowQobuz=" << g.allowQobuz << "\n"
+		  << "; 1 = show an in-game notification when the Harmony server is not reachable (and when it is back).\n"
+		  << "ToastEnabled=" << g.toastEnabled << "\n"
+		  << "; Minutes between repeated notifications while Harmony stays unreachable (1-60).\n"
+		  << "ToastIntervalMinutes=" << g.toastIntervalMinutes << "\n"
 		  << "\n[Features]\n"
 		  << "; Kill switches (1 = on). Switch one off to isolate a problem.\n"
 		  << "Retarget=" << g.features.retarget << "\n"

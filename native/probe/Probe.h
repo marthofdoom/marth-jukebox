@@ -1,12 +1,11 @@
 #pragma once
 
-// M0a read-only music probe. Passive: reads engine state, never writes it, takes
-// no engine lock, installs no hook. M0b extends its logging (now-playing label,
-// 1 s position fields) and runs the retarget tick after its own (see Retarget.h).
+// Read-only music probe (M0a, kept for diagnostics). Passive: reads engine state, never writes it, takes no
+// engine lock, installs no hook. Its 250 ms watcher task runs the retarget tick after its own (Retarget.h).
 namespace MJ::Probe {
 
-    // Main thread, at kDataLoaded: enumerate every BGSMusicType and its tracks,
-    // look up our two MUST records, then start the 250 ms watcher.
+    // Main thread, at kDataLoaded: enumerate every BGSMusicType and its tracks (identity maps; per-track lines at
+    // debug level), then start the 250 ms watcher.
     void OnDataLoaded();
 
     // Main thread only, after OnDataLoaded. Identity lookup of a track interface
@@ -17,7 +16,7 @@ namespace MJ::Probe {
     // Main thread only. "EDID(FORMID)" for an enumerated music type, else a pointer string.
     std::string TypeName(const RE::BSIMusicType* a_type);
 
-    // Main thread only. M0c: logs a music type's trackHistory (BSIMusicType +0x18,
+    // Main thread only. Debug level. Logs a music type's trackHistory (BSIMusicType +0x18,
     // BSTArray<uint32_t>): size, first 3 values, and the wrapper at tracks[trackHistory[0]].
     // Read-only; only for a type enumerated at kDataLoaded.
     void LogTrackHistory(const RE::BSIMusicType* a_type, const char* a_tag);

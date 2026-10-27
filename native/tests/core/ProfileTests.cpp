@@ -108,7 +108,7 @@ MJ_TEST(Profile_GoldenSubEnvironmentsAndOtherMods)
 {
 	Settings s;
 	s.global.personalKey = "SEKRET";
-	s.global.serverUrl = "http://harmony:8080";
+	s.global.serverUrl = "http://music.example.lan:8080";
 	s.environments["explore"] = Env(Mode::Genre, "Ambient");
 	s.environments["explore.tundra"] = Env(Mode::Genre, "Folk");
 	s.environments["explore.snow"] = Env(Mode::Vanilla, "");  // explicit vanilla: no type, group not used for it
@@ -120,7 +120,7 @@ MJ_TEST(Profile_GoldenSubEnvironmentsAndOtherMods)
 	CheckCommon(j);
 	MJ_CHECK(j["types"].contains("explore.tundra") && j["types"].contains("other.WTMUSExplore"));
 	MJ_CHECK(!j["types"].contains("explore.snow"));
-	MJ_CHECK(out.find("SEKRET") == std::string::npos && out.find("harmony:8080") == std::string::npos);
+	MJ_CHECK(out.find("SEKRET") == std::string::npos && out.find("music.example.lan:8080") == std::string::npos);
 	CheckGolden("sub_envs.json", out);
 }
 

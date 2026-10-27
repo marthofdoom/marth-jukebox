@@ -805,6 +805,17 @@ namespace MJ::Net {
                 } else {
                     out.containers.push_back("wav");  // a server without the field only does WAV
                 }
+                if (const auto it = j.find("services"); it != j.end() && it->is_object()) {
+                    out.servicesReported = true;
+                    out.libraryUsable    = JBool(*it, "library");
+                    out.ytmusicUsable    = JBool(*it, "ytmusic");
+                    out.qobuzUsable      = JBool(*it, "qobuz");
+                }
+                if (const auto it = j.find("excluded_services"); it != j.end() && it->is_array()) {
+                    for (const auto& c : *it) {
+                        if (c.is_string()) out.excludedServices.push_back(c.get<std::string>());
+                    }
+                }
                 if (const auto it = j.find("cache"); it != j.end() && it->is_object()) {
                     out.cache.bytes           = JInt(*it, "bytes");
                     out.cache.files           = JInt(*it, "files");
@@ -943,16 +954,54 @@ namespace MJ::Net {
                         if (s.title.empty()) s.title = JStr(e, "name");
                         s.artist    = JStr(e, "artist");
                         s.album     = JStr(e, "album");
+                        s.owner     = JStr(e, "owner");
                         s.durationS = JInt(e, "duration_s");
+                        s.trackCount = JInt(e, "track_count");
                         a_vec.push_back(std::move(s));
                     }
                 };
                 fill("tracks", out.tracks);
                 fill("artists", out.artists);
                 fill("albums", out.albums);
+                fill("playlists", out.playlists);
             } catch (const std::exception& e) {
                 out.error   = Error::kBadResponse;
                 out.message = std::string("bad search response: ") + e.what();
+            }
+            return out;
+        }
+
+        // GET a listing; `a_key` is the array to read (genres / artists / playlists). Tolerant parse.
+        BrowseResult DoBrowse(const std::string& a_path, const char* a_key, bool a_genres, const std::stop_token& a_st) {
+            ArmStop();  // the stop callback below only signals; it never calls WinHTTP
+            std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
+            BrowseResult       out;
+            std::string        body;
+            static_cast<Result&>(out) = Roundtrip(L"GET", "GET", a_path, nullptr, a_st, body);
+            if (!out.Ok()) return out;
+            try {
+                const json j = json::parse(body, nullptr, false);
+                if (!j.is_object()) throw std::runtime_error("listing body is not a JSON object");
+                if (const auto en = j.find("enabled"); en != j.end() && en->is_boolean()) out.enabled = en->get<bool>();
+                const auto it = j.find(a_key);
+                if (it != j.end() && it->is_array()) {
+                    for (const auto& e : *it) {
+                        if (!e.is_object()) continue;
+                        SearchItem s;
+                        s.title      = JStr(e, a_genres ? "name" : "title");
+                        if (s.title.empty()) s.title = JStr(e, "name");
+                        s.id         = a_genres ? s.title : JStr(e, "id");
+                        s.service    = a_genres ? std::string("local") : JStr(e, "service");
+                        if (s.service.empty()) s.service = "local";
+                        s.owner      = JStr(e, "owner");
+                        s.trackCount = JInt(e, "track_count");
+                        if (s.id.empty() || s.title.empty()) continue;
+                        out.items.push_back(std::move(s));
+                    }
+                }
+            } catch (const std::exception& e) {
+                out.error   = Error::kBadResponse;
+                out.message = std::string("bad listing response: ") + e.what();
             }
             return out;
         }
@@ -1253,6 +1302,32 @@ namespace MJ::Net {
     SearchResult HarmonyClient::Search(std::string_view a_query, std::string_view a_kinds, int a_limit, std::stop_token a_st) {
         return impl_->DoSearch(a_query, a_kinds, a_limit, a_st);
     }
+
+    FailureClass ClassifyFailure(Error a_err) {
+        switch (a_err) {
+        case Error::kOk:          return FailureClass::kNone;
+        case Error::kUnreachable:
+        case Error::kTimeout:
+        case Error::kDisabled:    return FailureClass::kNetwork;
+        case Error::kBadKey:      return FailureClass::kAuth;
+        case Error::kCancelled:   return FailureClass::kCancelled;
+        default:                  return FailureClass::kOther;
+        }
+    }
+
+    BrowseResult HarmonyClient::LibraryView(std::string_view a_view, int a_limit, std::stop_token a_st) {
+        if (a_view != "genres" && a_view != "artists") {
+            BrowseResult r;
+            r.error   = Error::kBadRequest;
+            r.message = "unknown library view";
+            return r;
+        }
+        const int limit = a_limit < 1 ? 1 : (a_limit > 5000 ? 5000 : a_limit);
+        return impl_->DoBrowse("/api/library/view?view=" + std::string(a_view) + "&limit=" + std::to_string(limit),
+                               a_view == "genres" ? "genres" : "artists", a_view == "genres", a_st);
+    }
+
+    BrowseResult HarmonyClient::Playlists(std::stop_token a_st) { return impl_->DoBrowse("/api/playlists", "playlists", false, a_st); }
 
     DownloadResult HarmonyClient::DownloadAudio(std::string_view a_audioUrl, const fs::path& a_destFile,
                                                 double a_expectedDurationS, std::stop_token a_st) {

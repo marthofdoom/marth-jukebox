@@ -2,9 +2,8 @@
 # the SkyrimDev/HelloWorld-using-CommonLibSSE-NG template). Doctrine: adapt
 # working sources, never write a build system from memory.
 #
-# M0a is passive: CommonLibSSE only (no imgui; nlohmann_json joined with the net client). The runtime
-# declaration is add_commonlibsse_plugin's default (Address Library version
-# independence), exactly as MFO ships it: one DLL for 1.5.97 and 1.6.1170.
+# CommonLibSSE + nlohmann_json + the pure core library mj_core (core.cmake). The runtime
+# declaration is add_commonlibsse_plugin's default (Address Library version independence), exactly as MFO ships it: one DLL for 1.5.97 and 1.6.1170.
 cmake_minimum_required(VERSION 3.21)
 
 project(MarthJukebox VERSION 0.1.0 LANGUAGES CXX)
@@ -16,9 +15,12 @@ option(MJ_BUILD_TESTS "Build the mj_net_tests console target (not part of the sh
 
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     plugin.cpp
+    app/App.cpp
     probe/Probe.cpp
     retarget/Retarget.cpp
     slots/SlotWriter.cpp
+    pool/PoolWorker.cpp
+    pool/SlotFiller.cpp
     net/HarmonyClient.cpp
 )
 
@@ -35,7 +37,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # Pure-C++ core (environment map, settings, profile builder) and its tests.
 include(${CMAKE_CURRENT_SOURCE_DIR}/core.cmake)
 # Network client: WinHTTP (system DLL, no extra dependency) + nlohmann_json for the Harmony replies.
-target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json winhttp)
+# mj_core: settings, environment map, profile builder, pool model, slot audio (dr_flac), slot planning.
+target_link_libraries(${PROJECT_NAME} PRIVATE mj_core nlohmann_json::nlohmann_json winhttp)
 
 # Test target for the network client. Built only with -DMJ_BUILD_TESTS=ON (CI turns it on); it
 # is a plain console exe that never links CommonLibSSE. HarmonyClient.cpp includes "PCH.h", which

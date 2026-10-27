@@ -1,51 +1,73 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <map>
+#include <stop_token>
+#include <string>
 
-// M0b slot protocol test. ONE worker thread does all file IO (WAV generation, .tmp
-// write, verify, rename, lock probe, kill-switch poll). It never touches engine
-// memory: the main thread publishes each slot's inner-track status through atomics.
+// Slot file protocol (docs/INTEGRATION-1.0.md A.3, docs/M0C-RESULTS.md). Worker threads only: every function
+// here does file IO except the path helpers. Nothing here reads or writes engine memory.
+//
+// A slot file is Data\Music\Harmony\slot_NN.wav, the ANAM of wrapper MJ_SLOT_NN in MarthJukebox.esp. It is
+// replaced in two steps:
+//   PrepareSlot: decode/copy into slot_NN.wav.tmp (canonical PCM WAV) -> flush -> size check;
+//   CommitSlot : record the size in the manifest (once per prepared file) -> MoveFileExW(REPLACE_EXISTING) over
+//                the (possibly playing) slot file.
+// M0c proved the rename over a PLAYING file on Proton + MO2/USVFS (9 of 9). On Windows it may fail with a sharing
+// violation: the .tmp is then KEPT and only the rename is retried later (the caller decides when; nothing is
+// forced, nothing is re-decoded).
+//
+// Ownership: the plugin only ever replaces a slot file it wrote itself. Data\SKSE\Plugins\MarthJukebox\slots.json
+// records, per slot file, the sizes the plugin produced and which track (environment + key + cache file) it holds;
+// an existing slot file whose size is not recorded is never overwritten (loud error: delete it by hand).
 namespace MJ::Slots {
 
-    // "<directory of the game exe>\Data". Absolute, so it does not depend on the CWD;
-    // under MO2 the USVFS hooks map it, so the engine and this plugin see the same tree.
+    // "<directory of the game exe>\Data". Absolute (MO2's USVFS maps it for the engine and for us alike).
     std::filesystem::path DataDir();
+    std::filesystem::path HarmonyDir();   // Data\Music\Harmony
+    std::filesystem::path PluginDir();    // Data\SKSE\Plugins
 
-    // Synchronous stat of Data/SKSE/Plugins/MarthJukebox.noretarget. Load time only.
-    bool KillSwitchPresentNow();
+    // Data\SKSE\Plugins\MarthJukebox.noretarget exists (stat). Worker threads or load time.
+    bool KillSwitchFilePresent();
 
-    // Latest result of the worker's kill-switch poll (every 2 s). Any thread.
-    bool KillSwitchSeen();
+    // What the manifest says a slot file holds, if its current size matches the record.
+    struct SlotRecord {
+        std::string   env, key, file;
+        std::uint64_t bytes = 0;
+    };
 
-    // Main thread, once (at kDataLoaded). Starts the worker; its first job is the
-    // start-up write-lock probe of slot A.
-    void Start();
+    // Reads the ownership manifest (once) and returns the slots whose file on disk still has the recorded size and
+    // a recorded track (A-F7: they need no rewrite at start). Worker only.
+    std::map<int, SlotRecord> LoadManifest();
 
-    // steady_clock in ms (shared by the main thread and the worker for the settle rule).
-    long long SteadyMs();
+    struct PrepResult {
+        bool          ok = false;
+        bool          sourceError = false;  // the cache file is bad (drop it); false = our side failed
+        std::string   error;
+        std::uint64_t bytes = 0;
+        long long     ms = 0;
+    };
+    // Writes slot_NN.wav.tmp from `a_src` (WAV or FLAC cache file). Refuses when the existing slot file is not ours.
+    PrepResult PrepareSlot(int a_slot, const std::filesystem::path& a_src, std::stop_token a_st);
 
-    // Main thread, every tick: the slot's INNER track status (BSIMusicTrack::MUSIC_STATUS),
-    // the SteadyMs() at which its current Inactive/Finished run began (-1 while busy), and
-    // the settle time required before the slot file may be replaced (fadeTime + 1 s).
-    void PublishStatus(int a_slot, std::uint32_t a_status, long long a_idleSinceMs, long long a_settleMs);
+    struct CommitResult {
+        bool        ok = false;
+        bool        retryable = false;     // sharing / lock violation: keep the .tmp, try the rename again later
+        bool        accessDenied = false;  // ERROR_ACCESS_DENIED (retryable only a few times)
+        std::string error;
+    };
+    // Renames the prepared .tmp over the slot file. `a_firstAttempt` records the new size in the manifest first (not
+    // repeated on retries). On success the manifest records the track (env, key, cache file).
+    CommitResult CommitSlot(int a_slot, std::uint64_t a_bytes, bool a_firstAttempt, const std::string& a_env, const std::string& a_key,
+                            const std::string& a_file);
 
-    // Main thread. Queue a refresh of a slot (sine WAV -> .tmp -> verify -> rename).
-    // The caller only requests a settled slot; the worker re-checks (from the published
-    // atomics) before it writes and before the rename.
-    void RequestRefresh(int a_slot);
+    // Deletes the slot's .tmp (abandoned preparation).
+    void DiscardTmp(int a_slot);
 
-    // Main thread. Queue a write-open probe of the slot file (no write, no truncate).
-    void RequestLockProbe(int a_slot, const char* a_why);
+    // Removes stale slot_NN.wav.tmp files left by a crash (they are ours by name and never played). Worker only.
+    void CleanTempFiles();
 
-    // M0c, main thread, every tick: whether wrapper A is MUSExploreTundra's current track,
-    // and the handle/index of A's LAST play event (kept while A is not current, so only a
-    // new play, not an interruption, makes a pending experiment drop).
-    void PublishPlay(bool a_aCurrent, std::uint32_t a_handle, std::uint32_t a_idx);
-
-    // M0c, main thread, on a play event of A. The worker waits until the event is 1500 ms
-    // old, drops it if the published handle/index changed meanwhile, then runs (e) the
-    // write-open probe and (f) the rename-over of the PLAYING explore_a.wav (odd n: a tone,
-    // even n: the original from explore_a.wav.orig).
-    void RequestPlayExperiment(std::uint32_t a_n, std::uint32_t a_handle, std::uint32_t a_idx);
+    std::string Utf8(const std::filesystem::path& a_p);
 
 }

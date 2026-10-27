@@ -19,7 +19,7 @@ net client + pool -> menu -> FLAC decode + remember-place -> one LoreRim test cy
 Parallel, already running: Harmony `game-pools` (variety). Done: Harmony FLAC container (merged, NOT yet deployed to production).
 
 ## Decisions that block 1.0 and are marth's
-- Updating the production Harmony (harmony:8080) with the merged FLAC work and, later, `game-pools`.
+- Updating the production Harmony server with the merged FLAC work and, later, `game-pools`.
 - Which of FLAC / ADPCM ships (FLAC is built; ADPCM only if the engine accepts it and disk matters).
 
 ## 1.0.1 (after 1.0.0 ships)

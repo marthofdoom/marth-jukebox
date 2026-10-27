@@ -354,6 +354,80 @@ namespace {
         CHECK_ERR(r, Error::kOk);
         CHECK(r.reachable && !r.enabled && !r.ffmpeg);
         CHECK(r.containers.size() == 1 && r.containers[0] == "wav");
+        CHECK(!r.servicesReported && !r.ytmusicUsable);  // older server: no source-list support
+    }
+
+    // Harmony 1.0.13+: `services` + `excluded_services` (the capability check for `sources` lists).
+    void T_StatusServices() {
+        Server s([](const Req&, Conn& c, int) {
+            c.Send(Resp(200, "OK", R"({"enabled":true,"ffmpeg":true,"containers":["wav","flac"],
+              "services":{"library":true,"ytmusic":true,"qobuz":false},"excluded_services":["qobuz",3]})"));
+        });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        const StatusResult r = cl.Status();
+        CHECK_ERR(r, Error::kOk);
+        CHECK(r.servicesReported && r.libraryUsable && r.ytmusicUsable && !r.qobuzUsable);
+        CHECK(r.excludedServices.size() == 1 && r.excludedServices[0] == "qobuz");
+        CHECK(r.containers.size() == 2);
+    }
+
+    // Library genres / artists and the playlists listing (menu browse without text entry).
+    void T_Browse() {
+        Server s([](const Req& q, Conn& c, int) {
+            if (q.target.rfind("/api/library/view?view=genres", 0) == 0)
+                c.Send(Resp(200, "OK", R"({"enabled":true,"view":"genres","genres":[{"name":"Folk","track_count":12},{"name":""},7],"total":2})"));
+            else if (q.target.rfind("/api/library/view?view=artists", 0) == 0)
+                c.Send(Resp(200, "OK", R"({"enabled":false,"view":"artists","artists":[],"total":0})"));
+            else
+                c.Send(Resp(200, "OK", R"({"playlists":[{"id":"PL1","title":"Epic","service":"ytmusic","track_count":40,"owner":"me"}]})"));
+        });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        const BrowseResult g = cl.LibraryView("genres", 9000);
+        CHECK_ERR(g, Error::kOk);
+        CHECK(g.enabled && g.items.size() == 1 && g.items[0].id == "Folk" && g.items[0].title == "Folk" && g.items[0].service == "local" &&
+              g.items[0].trackCount == 12);
+        const BrowseResult a = cl.LibraryView("artists", 50);
+        CHECK_ERR(a, Error::kOk);
+        CHECK(!a.enabled && a.items.empty());
+        const BrowseResult p = cl.Playlists();
+        CHECK_ERR(p, Error::kOk);
+        CHECK(p.items.size() == 1 && p.items[0].id == "PL1" && p.items[0].owner == "me" && p.items[0].trackCount == 40);
+        CHECK_ERR(cl.LibraryView("songs", 5), Error::kBadRequest);
+        const auto seen = s.Seen();
+        CHECK(seen.size() == 3 && seen[0].target == "/api/library/view?view=genres&limit=5000" && seen[2].target == "/api/playlists");
+    }
+
+    // Review B2: Harmony 1.0.12 accepts only profile/type/sources/count/peek in `next` and answers 400 to anything
+    // else. The plugin passes an EMPTY container for WAV, which must leave the key out of the body entirely.
+    void T_NextOldServerRejectsUnknownKeys() {
+        Server s([](const Req& q, Conn& c, int) {
+            const json b = json::parse(q.body, nullptr, false);
+            bool       ok = b.is_object();
+            if (ok) {
+                for (const auto& [k, v] : b.items()) {
+                    if (k != "profile" && k != "type" && k != "sources" && k != "count" && k != "peek") ok = false;
+                }
+            }
+            if (ok) c.Send(Resp(200, "OK", R"({"profile":"p","type":"explore","sources":"library","pool_size":3,"tracks":[]})"));
+            else c.Send(Resp(400, "Bad Request", R"({"error":"unknown field","code":"bad_request"})"));
+        });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        CHECK_ERR(cl.Next("p", "explore", "library", 3, false, ""), Error::kOk);
+        CHECK_ERR(cl.Next("p", "explore", "library", 3, false, "flac"), Error::kBadRequest);  // what an old server does
+    }
+
+    // Review R2-2: a cancel is never a network failure (no back-off, no toast count).
+    void T_ClassifyFailure() {
+        CHECK(ClassifyFailure(Error::kCancelled) == FailureClass::kCancelled);
+        CHECK(ClassifyFailure(Error::kUnreachable) == FailureClass::kNetwork);
+        CHECK(ClassifyFailure(Error::kTimeout) == FailureClass::kNetwork);
+        CHECK(ClassifyFailure(Error::kDisabled) == FailureClass::kNetwork);
+        CHECK(ClassifyFailure(Error::kBadKey) == FailureClass::kAuth);
+        CHECK(ClassifyFailure(Error::kOk) == FailureClass::kNone);
+        CHECK(ClassifyFailure(Error::kBadRequest) == FailureClass::kOther);
     }
 
     void T_Next() {
@@ -511,7 +585,7 @@ namespace {
             c.Send(Resp(200, "OK", R"({"tracks":[{"service":"ytmusic","id":"abc","title":"T","artist":"A","album":"B","duration_s":120.5,"extra":1}],
               "artists":[{"service":"local","id":"7","name":"Artist One"}],
               "albums":[{"service":"qobuz","id":12345,"title":"Al","artist":{"name":"X"}}],
-              "playlists":[],"unknown":true})"));
+              "playlists":[{"service":"ytmusic","id":"PLx","title":"Mix","owner":"o","track_count":25}],"unknown":true})"));
         });
         HarmonyClient cl;
         Configured(cl, MakeConfig(s.Url()));
@@ -520,6 +594,7 @@ namespace {
         CHECK(r.tracks.size() == 1 && r.tracks[0].id == "abc" && r.tracks[0].durationS == 120 && r.tracks[0].album == "B");
         CHECK(r.artists.size() == 1 && r.artists[0].title == "Artist One" && r.artists[0].service == "local");
         CHECK(r.albums.size() == 1 && r.albums[0].id == "12345" && r.albums[0].artist == "X");
+        CHECK(r.playlists.size() == 1 && r.playlists[0].id == "PLx" && r.playlists[0].owner == "o" && r.playlists[0].trackCount == 25);
         const auto seen = s.Seen();
         CHECK(seen.size() == 1 && seen[0].target == "/api/search?q=dark%20ambient%26x&kinds=tracks%2Cartists&limit=5");
     }
@@ -1264,6 +1339,10 @@ int main() {
         { "receive_timeout", T_Timeout },
         { "put_profile", T_PutProfile },
         { "search", T_Search },
+        { "status_services", T_StatusServices },
+        { "browse", T_Browse },
+        { "classify_failure", T_ClassifyFailure },
+        { "next_old_server_rejects_unknown_keys", T_NextOldServerRejectsUnknownKeys },
         { "download_wav_ok", T_DownloadWavOk },
         { "download_replace_and_preserve", T_DownloadReplacesAndPreserves },
         { "download_202_then_200", T_Download202Then200 },

@@ -1,9 +1,8 @@
-// marth-jukebox M0b: M0a's passive probe + the MUSExploreTundra retarget spike
-// (retarget/, the only engine-memory writer) + the slot file test (slots/). No hooks.
-// See DESIGN.md and docs/M0B-TEST.md.
+// marth's Jukebox: plays Skyrim music from a Harmony server (DESIGN.md, docs/INTEGRATION-1.0.md).
+// Game thread: probe + retarget (retarget/ is the only engine-memory writer). Workers: pool/ (Harmony, cache,
+// slot files) and app/ (connection test, search, peek). No hooks.
 #include "PCH.h"
-#include "probe/Probe.h"
-#include "retarget/Retarget.h"
+#include "app/AppHost.h"
 
 namespace {
 
@@ -19,9 +18,9 @@ namespace {
         }
 
         auto log = std::make_shared<spdlog::logger>("global", std::move(sink));
-        log->set_level(spdlog::level::info);
+        log->set_level(spdlog::level::info);  // the pool thread applies [General] LogLevel once the INI is loaded
         // Flush every line: a CTD must not eat the last second of the log.
-        log->flush_on(spdlog::level::info);
+        log->flush_on(spdlog::level::trace);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
     }
@@ -31,13 +30,13 @@ namespace {
         switch (a_msg->type) {
         case SKSE::MessagingInterface::kDataLoaded:
             spdlog::info("[startup] kDataLoaded");
-            MJ::Probe::OnDataLoaded();      // identity maps + watcher
-            MJ::Retarget::OnDataLoaded();   // needs the maps; no writes here
+            MJ::App::OnDataLoaded();
             break;
-        case SKSE::MessagingInterface::kInputLoaded:
         case SKSE::MessagingInterface::kNewGame:
+            MJ::App::OnGameLoaded("kNewGame");
+            break;
         case SKSE::MessagingInterface::kPostLoadGame:
-            MJ::Retarget::OnMessage(a_msg->type);   // logs the target's tracks.size()
+            MJ::App::OnGameLoaded("kPostLoadGame");
             break;
         default:
             break;
@@ -52,10 +51,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
 
     const auto* plugin = SKSE::PluginDeclaration::GetSingleton();
     const auto  ver    = plugin->GetVersion();
-    spdlog::info("=== MarthJukebox {}.{}.{} (M0b retarget spike) loading -- game {} ===",
-                 ver.major(), ver.minor(), ver.patch(),
+    spdlog::info("=== MarthJukebox {}.{}.{} loading -- game {} ===", ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
 
+    MJ::App::Init();  // settings store object only; the INI is read by the pool thread after kDataLoaded
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
 
     spdlog::info("=== MarthJukebox loaded ===");
