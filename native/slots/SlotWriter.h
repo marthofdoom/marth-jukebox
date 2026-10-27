@@ -37,4 +37,15 @@ namespace MJ::Slots {
     // Main thread. Queue a write-open probe of the slot file (no write, no truncate).
     void RequestLockProbe(int a_slot, const char* a_why);
 
+    // M0c, main thread, every tick: whether wrapper A is MUSExploreTundra's current track,
+    // and the handle/index of A's LAST play event (kept while A is not current, so only a
+    // new play, not an interruption, makes a pending experiment drop).
+    void PublishPlay(bool a_aCurrent, std::uint32_t a_handle, std::uint32_t a_idx);
+
+    // M0c, main thread, on a play event of A. The worker waits until the event is 1500 ms
+    // old, drops it if the published handle/index changed meanwhile, then runs (e) the
+    // write-open probe and (f) the rename-over of the PLAYING explore_a.wav (odd n: a tone,
+    // even n: the original from explore_a.wav.orig).
+    void RequestPlayExperiment(std::uint32_t a_n, std::uint32_t a_handle, std::uint32_t a_idx);
+
 }

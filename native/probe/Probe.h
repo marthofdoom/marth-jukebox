@@ -17,6 +17,11 @@ namespace MJ::Probe {
     // Main thread only. "EDID(FORMID)" for an enumerated music type, else a pointer string.
     std::string TypeName(const RE::BSIMusicType* a_type);
 
+    // Main thread only. M0c: logs a music type's trackHistory (BSIMusicType +0x18,
+    // BSTArray<uint32_t>): size, first 3 values, and the wrapper at tracks[trackHistory[0]].
+    // Read-only; only for a type enumerated at kDataLoaded.
+    void LogTrackHistory(const RE::BSIMusicType* a_type, const char* a_tag);
+
     // ms since the DLL was loaded (shared clock for all log lines).
     long long NowMs();
 

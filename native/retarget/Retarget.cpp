@@ -31,6 +31,11 @@ namespace MJ::Retarget {
         constexpr RE::FormID       kLocalId[2] = { 0x800, 0x801 };  // A, B (tools/make_esp.py)
         constexpr const char*      kSlotName[2] = { "A", "B" };
 
+        // M0c: true = every replaceable entry points to wrapper A only (B unused) and the
+        // slot test is the play-event experiment on A. false = the M0b two-slot layout
+        // (alternating A,B) with the status-edge/settle refresh of the other slot.
+        constexpr bool kSingleWrapper = true;
+
         constexpr std::uint32_t kInactive  = 0;  // BSIMusicType/BSIMusicTrack MUSIC_STATUS
         constexpr std::uint32_t kPlaying   = 1;
         constexpr std::uint32_t kFinished  = 4;
@@ -157,7 +162,8 @@ namespace MJ::Retarget {
         }
 
         // ENGINE WRITE #1. Caller: Tick(), after IsSafe() in the same task. Overwrites only
-        // Single/Palette entries; alternates A,B by position among our entries.
+        // Single/Palette entries; with kSingleWrapper all of them get A, otherwise A,B
+        // alternate by position among our entries.
         void Apply() {
             auto&               arr = g_target->tracks;
             const std::uint32_t n   = arr.size();
@@ -172,7 +178,7 @@ namespace MJ::Retarget {
                 case Kind::kReplaceable:
                     {
                         RE::BSIMusicTrack* orig = arr[i];
-                        const int          s    = static_cast<int>(k % 2);
+                        const int          s    = kSingleWrapper ? 0 : static_cast<int>(k % 2);
                         const auto*        w    = Probe::WrapperOf(orig);
                         g_originals.insert_or_assign(i, orig);
                         arr[i] = g_iface[s];  // plain pointer store into existing storage
@@ -203,8 +209,49 @@ namespace MJ::Retarget {
             return static_cast<long long>(f * 1000.0f) + 1000;
         }
 
+        // M0c play-event state (main thread). A PLAY EVENT is: MUSExploreTundra is
+        // BSMusicManager::current, its tracks[currentTrackIndex] is wrapper A, and (A's inner
+        // trackHandle.soundID differs from the last seen one OR currentTrackIndex differs from
+        // the last seen one). M0b showed a new sound handle per pick while the status stays
+        // Playing, so status edges miss re-plays. Last-seen values are kept while A is not
+        // current, so a resume after combat (same handle, same index) is not an event.
+        bool          g_haveLastPlay{ false };
+        std::uint32_t g_lastHandle{ 0 };
+        std::uint32_t g_lastIdx{ 0 };
+        std::uint32_t g_playN{ 0 };
+
+        void TickPlayEvents() {
+            const auto*   mgr      = RE::BSMusicManager::GetSingleton();
+            bool          aCurrent = false;
+            std::uint32_t handle = 0, idx = 0;
+            if (mgr && mgr->current == g_target) {
+                idx = g_target->currentTrackIndex;
+                if (idx < g_target->tracks.size() && g_target->tracks[idx] == g_iface[0]) {
+                    aCurrent = true;
+                    // Inner track checked Single at load: static_cast is a no-op (primary base).
+                    const auto* st = static_cast<const RE::BGSMusicSingleTrack*>(g_wrapper[0]->track);
+                    handle         = st->trackHandle.soundID;
+                }
+            }
+            if (!aCurrent) {
+                Slots::PublishPlay(false, g_lastHandle, g_lastIdx);
+                return;
+            }
+            Slots::PublishPlay(true, handle, idx);
+            if (g_haveLastPlay && handle == g_lastHandle && idx == g_lastIdx) return;
+            g_haveLastPlay = true;
+            g_lastHandle   = handle;
+            g_lastIdx      = idx;
+            ++g_playN;
+            spdlog::info("[slots] play #{} handle=0x{:08X} idx={} trackStatus={} t=+{}ms", g_playN, handle, idx,
+                         StatusName(g_wrapper[0]->track->trackStatus.underlying()), Probe::NowMs());
+            Probe::LogTrackHistory(g_target, std::format("play #{}", g_playN).c_str());
+            Slots::RequestPlayExperiment(g_playN, handle, idx);
+        }
+
         // Main thread. Our two inner tracks' status (+ idle-since, settle time) -> worker
-        // atomics; refresh triggers.
+        // atomics; refresh triggers. With kSingleWrapper only the publishing runs and the
+        // play-event path replaces the status-edge trigger.
         void TickSlots() {
             const long long now    = Slots::SteadyMs();
             const long long settle = SettleMs();
@@ -223,13 +270,17 @@ namespace MJ::Retarget {
                 if (st[s] == g_prevSlotStatus[s]) continue;
                 spdlog::info("[slots] t=+{}ms slot {} inner status {} -> {}", Probe::NowMs(), kSlotName[s],
                              StatusName(g_prevSlotStatus[s]), StatusName(st[s]));
-                if (st[s] == kPlaying) {
+                if (!kSingleWrapper && st[s] == kPlaying) {
                     if (s == 0) Slots::RequestLockProbe(0, "A is Playing");
                     g_wantRefresh[1 - s] = true;
                     spdlog::info("[slots] {} started playing: refresh of slot {} wanted (posted once it is idle)", kSlotName[s],
                                  kSlotName[1 - s]);
                 }
                 g_prevSlotStatus[s] = st[s];
+            }
+            if constexpr (kSingleWrapper) {
+                TickPlayEvents();
+                return;
             }
             for (int s = 0; s < 2; ++s) {
                 if (!g_wantRefresh[s] || g_idleSince[s] < 0) continue;

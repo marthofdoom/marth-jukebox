@@ -412,6 +412,40 @@ namespace MJ::Probe {
         return std::format("<unknown BSIMusicType {:p}>", static_cast<const void*>(a_t));
     }
 
+    void LogTrackHistory(const RE::BSIMusicType* a_type, const char* a_tag) {
+        if (!a_type || !g_typeByIface.contains(a_type)) {
+            spdlog::info("[probe] trackHistory ({}): type {} not enumerated; not read", a_tag, TypeName(a_type));
+            return;
+        }
+        const auto&         hist   = a_type->trackHistory;
+        const auto&         tracks = a_type->tracks;
+        const std::uint32_t hn     = hist.size();
+        std::string         vals;
+        for (std::uint32_t i = 0; i < hn && i < 3; ++i) vals += std::format("{}{}", vals.empty() ? "" : ",", hist[i]);
+        std::string first = "n/a";
+        if (hn > 0) {
+            const std::uint32_t h0 = hist[0];
+            if (h0 < tracks.size()) {
+                const RE::BSIMusicTrack* t = tracks[h0];
+                if (!t) {
+                    first = std::format("tracks[{}]=null", h0);
+                } else if (const auto* w = WrapperOf(t)) {
+                    std::string inner = "?";
+                    if (w->track) inner = TrackTypeName(static_cast<std::uint32_t>(w->track->GetType()));
+                    const int slot = Retarget::SlotOf(t);
+                    first = std::format("tracks[{}]={} ({:08X}, inner {})", h0, slot == 0 ? "A" : slot == 1 ? "B" : "vanilla",
+                                        w->GetFormID(), inner);
+                } else {
+                    first = std::format("tracks[{}]=<unknown {:p}>", h0, static_cast<const void*>(t));
+                }
+            } else {
+                first = std::format("trackHistory[0]={} OUT OF RANGE (tracks={})", h0, tracks.size());
+            }
+        }
+        spdlog::info("[probe] trackHistory ({}): type={} currentTrackIndex={} tracks={} history size={} first=[{}] head: {}", a_tag,
+                     TypeName(a_type), a_type->currentTrackIndex, tracks.size(), hn, vals, first);
+    }
+
     RE::BGSMusicTrackFormWrapper* WrapperOf(const RE::BSIMusicTrack* a_track) {
         if (!a_track) return nullptr;
         const auto it = g_trackByIface.find(a_track);
