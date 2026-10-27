@@ -15,6 +15,15 @@
 // the worker returns promptly, but "promptly" is still a cross-thread handoff of unbounded worst
 // case (scheduler, disk flush). Let the worker post its result back instead.
 //
+// Job cancellation: pass a per-job std::stop_token (one std::stop_source per job). Use Cancel() only
+// for shutdown / "Harmony away": it is sticky, and a ClearCancel() on the worker silently swallows a
+// Cancel() issued just before it.
+//
+// Back off after kTimeout / kUnreachable (exponential, e.g. 2 s doubling to a few minutes). Under
+// Wine the abandoned request's send task never times out against a server that accepts but never
+// answers: each such kTimeout/cancel leaves a WinHTTP thread + socket + 64 KiB context alive until
+// the server answers or closes, so a tight retry loop grows without bound.
+//
 // Secrets: the personal key is sent as the X-Harmony-Key header and is never logged. Any
 // "key=" query value in a logged URL is replaced by "***".
 #pragma once
@@ -33,7 +42,7 @@ namespace MJ::Net {
         kOk = 0,
         kBadConfig,          // base URL / key / timeouts rejected by Configure()
         kUnreachable,        // DNS, connect, TLS or connection failure
-        kTimeout,            // a WinHTTP resolve/connect/send/receive timeout fired
+        kTimeout,            // a WinHTTP timeout fired, or the client enforced it (WinHTTP timeout + 0.5 s; Wine)
         kCancelled,          // Cancel() or the caller's stop_token
         kRedirect,           // 3xx (redirects are never followed)
         kBadKey,             // 401

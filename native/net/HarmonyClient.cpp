@@ -244,6 +244,9 @@ namespace MJ::Net {
         // still touch (read buffer, request body, header block, completion event) lives here, so a
         // worker that abandons a request after a cancel never leaves WinHTTP writing into freed
         // memory, and never has to wait for WinHTTP (or Wine) to actually unblock a socket.
+        // Live ReqCtx count (test hook: must return to 0 once WinHTTP delivered every HANDLE_CLOSING).
+        std::atomic<long> g_liveReqCtx{ 0 };
+
         struct ReqCtx {
             std::atomic<long> refs{ 1 };
             HANDLE            done = nullptr;  // auto-reset; set once per completed async op
@@ -256,9 +259,10 @@ namespace MJ::Net {
             std::string       body;
             std::vector<char> buf;
 
-            ReqCtx() : done(::CreateEventW(nullptr, FALSE, FALSE, nullptr)), buf(kChunk) {}
+            ReqCtx() : done(::CreateEventW(nullptr, FALSE, FALSE, nullptr)), buf(kChunk) { g_liveReqCtx.fetch_add(1); }
             ~ReqCtx() {
                 if (done) ::CloseHandle(done);
+                g_liveReqCtx.fetch_sub(1);
             }
             ReqCtx(const ReqCtx&) = delete;
             ReqCtx& operator=(const ReqCtx&) = delete;
@@ -463,10 +467,10 @@ namespace MJ::Net {
         std::string         prefix;  // base path without trailing '/'
         std::wstring        wHost, wUserAgent, wKeyHeader;
         HINTERNET           session = nullptr;  // WINHTTP_FLAG_ASYNC, status callback OnWinHttpStatus
-        std::atomic<bool>   cancelled{ false };
         // Cancellation is signalling only: Cancel()/ClearCancel() set/reset cancelEvt and the
         // per-call stop_callback sets stopEvt. No WinHTTP call ever runs on the cancelling thread;
         // the worker (the only thread that touches WinHTTP handles) wakes up and closes its own handles.
+        // cancelEvt is the ONLY cancel state (no separate flag that could disagree with it).
         HANDLE              cancelEvt = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);  // manual reset, sticky
         HANDLE              stopEvt   = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);  // manual reset, per call
 
@@ -484,7 +488,9 @@ namespace MJ::Net {
             }
         }
 
-        bool Cancelled(const std::stop_token& a_st) const { return cancelled.load() || a_st.stop_requested(); }
+        bool Cancelled(const std::stop_token& a_st) const {
+            return ::WaitForSingleObject(cancelEvt, 0) == WAIT_OBJECT_0 || a_st.stop_requested();
+        }
 
         // Start of every API call: arm the per-call stop event. The stop_callback the caller then
         // registers only does SetEvent(stopEvt) (safe on any thread, including the game thread).
@@ -545,12 +551,23 @@ namespace MJ::Net {
             return Error::kUnreachable;
         }
 
-        // Cancellable sleep: false when cancelled/stopped.
-        bool SleepOrCancel(int a_ms, const std::stop_token& a_st) const {
-            if (Cancelled(a_st)) return false;
+        // Cancellable sleep: kOk after the full sleep, kCancelled, or kUnreachable if the wait itself failed.
+        Error SleepOrCancel(int a_ms, const std::stop_token& a_st, std::string& a_msg) const {
+            if (Cancelled(a_st)) {
+                a_msg = "cancelled";
+                return Error::kCancelled;
+            }
             const HANDLE hs[2] = { cancelEvt, stopEvt };
             const DWORD  w     = ::WaitForMultipleObjects(2, hs, FALSE, static_cast<DWORD>(a_ms));
-            return w == WAIT_TIMEOUT && !Cancelled(a_st);
+            if (w == WAIT_FAILED) {
+                a_msg = std::format("wait failed (error {})", static_cast<unsigned long>(::GetLastError()));
+                return Error::kUnreachable;
+            }
+            if (w != WAIT_TIMEOUT || Cancelled(a_st)) {
+                a_msg = "cancelled";
+                return Error::kCancelled;
+            }
+            return Error::kOk;
         }
 
         Error TransportError(DWORD a_err, const std::stop_token& a_st, std::string& a_msg) const {
@@ -589,7 +606,13 @@ namespace MJ::Net {
                 return r;
             }
             a_ex.recvMs = static_cast<DWORD>(a_recvTimeoutMs);
-            a_ex.ctx    = new ReqCtx();
+            try {
+                a_ex.ctx = new ReqCtx();
+            } catch (const std::exception&) {
+                r.error   = Error::kUnreachable;
+                r.message = "out of memory for the request context";
+                return r;
+            }
             if (!a_ex.ctx->done) return local(Error::kUnreachable, "CreateEvent failed");
             a_ex.conn = ::WinHttpConnect(session, wHost.c_str(), base.port, 0);
             if (!a_ex.conn) return fail(::GetLastError());
@@ -1046,12 +1069,16 @@ namespace MJ::Net {
                     if (now + std::chrono::seconds(waitS) > deadline) {
                         return fail(Error::kDeadline, std::format("still transcoding after {} s", cfg.downloadDeadlineS));
                     }
-                    if (!SleepOrCancel(waitS * 1000, a_st)) return fail(Error::kCancelled, "cancelled");
+                    std::string sm;
+                    if (const Error se = SleepOrCancel(waitS * 1000, a_st, sm); se != Error::kOk) return fail(se, sm);
                     continue;
                 }
                 if (ex.status != 200) {
                     std::string body;
-                    ReadBody(ex, body, kChunk, a_st);
+                    if (ReadBody(ex, body, kChunk, a_st).error == Error::kCancelled) {
+                        Log("GET", target, 0, ErrorName(Error::kCancelled), MsSince(t0));
+                        return fail(Error::kCancelled, "cancelled");
+                    }
                     Log("GET", target, ex.status, "", MsSince(t0));
                     Result rr;
                     ClassifyHttp(rr, ex.status, body, ex.retryAfterS);
@@ -1200,14 +1227,12 @@ namespace MJ::Net {
     }
 
     // Signalling only (no WinHTTP call, no lock, no wait): safe from the game thread.
-    void HarmonyClient::Cancel() {
-        impl_->cancelled.store(true);
-        ::SetEvent(impl_->cancelEvt);
-    }
-    void HarmonyClient::ClearCancel() {
-        impl_->cancelled.store(false);
-        ::ResetEvent(impl_->cancelEvt);
-    }
+    // The event is the single source of truth, so any interleaving of Cancel/ClearCancel leaves one
+    // consistent state (whichever ran last), never "flag says go, event says stop" or the reverse.
+    void HarmonyClient::Cancel() { ::SetEvent(impl_->cancelEvt); }
+    void HarmonyClient::ClearCancel() { ::ResetEvent(impl_->cancelEvt); }
+
+    long LiveRequestContextsForTests() { return g_liveReqCtx.load(); }
 
     StatusResult HarmonyClient::Status(std::stop_token a_st) { return impl_->DoStatus(a_st); }
 

@@ -48,4 +48,11 @@ if(MJ_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_link_libraries(mj_net_tests PRIVATE spdlog::spdlog nlohmann_json::nlohmann_json winhttp ws2_32)
+
+    # Optional AddressSanitizer build of the test exe (CI runs it as a separate, non-blocking step).
+    option(MJ_TESTS_ASAN "Build mj_net_tests with MSVC /fsanitize=address" OFF)
+    if(MJ_TESTS_ASAN)
+        target_compile_options(mj_net_tests PRIVATE /fsanitize=address /Zi)
+        target_link_options(mj_net_tests PRIVATE /DEBUG /INCREMENTAL:NO)
+    endif()
 endif()

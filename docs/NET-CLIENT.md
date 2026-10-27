@@ -9,7 +9,11 @@ nlohmann-json for replies, spdlog for logging. No engine or CommonLib calls.
 * Every call blocks (network + disk). **Worker threads only**, never the game thread or a UI callback.
 * One instance is used by ONE worker at a time. Only `Cancel()` / `ClearCancel()` and the
   `std::stop_token` you pass are safe from another thread while a call runs.
-* `Cancel()` is sticky (later calls return `kCancelled`) until `ClearCancel()`.
+* `Cancel()` is sticky (later calls return `kCancelled`) until `ClearCancel()`. The cancel state is one
+  manual-reset event (no separate flag), so any interleaving of `Cancel()`/`ClearCancel()` ends in the state
+  of whichever ran last, and a call whose pre-check sees "cancelled" sends nothing.
+* **Job cancellation = a per-job `std::stop_source`.** Use `Cancel()` only for shutdown / "Harmony away":
+  a `ClearCancel()` on the worker silently swallows a `Cancel()` issued just before it.
 * Cancellation only **signals**: `Cancel()` / `ClearCancel()` set or reset an event, and the
   `stop_callback` registered for your token only sets a per-call event. No WinHTTP call ever runs on the
   cancelling thread, so the game thread may cancel. It must **not** then wait for the worker (no join or
@@ -30,6 +34,10 @@ nlohmann-json for replies, spdlog for logging. No engine or CommonLib calls.
   itself and **no** receive timeout fires, so there a server that never answers is bounded by the worker's
   send-phase budget: 2 x connect + send + receive timeout + 0.5 s (defaults: 5+5+15+30+0.5 s; a download
   uses its longer receive timeout).
+* **Consumer contract: back off after `kTimeout` / `kUnreachable`** (exponential, e.g. 2 s doubling to a few
+  minutes). Under Wine an abandoned request's send task never times out against a server that accepts but
+  never answers: every such `kTimeout` or cancel leaves a WinHTTP thread + socket + 64 KiB context alive until
+  that server answers or closes. A tight retry loop against a hung server would grow without bound.
 * Wine 10 (local run of the CI exe, 2026-10-27): all cancel tests pass (wait phase, mid-body, racing start,
   two-client stress). Proton itself is still to be run.
 * Nothing throws across the API; every call returns a struct derived from `Result`
@@ -100,7 +108,7 @@ resumed partial file would need its own validation story; a failed download simp
 |---------|-------|
 | `kBadConfig` | `Configure` rejected the input, the client was never configured, or WinHTTP refused a safety option (redirect policy, timeouts) so the request was not sent |
 | `kUnreachable` | DNS / connect / TLS / other WinHTTP failure |
-| `kTimeout` | WinHTTP resolve/connect/send/receive timeout |
+| `kTimeout` | WinHTTP resolve/connect/send/receive timeout, or the client-enforced timeout (WinHTTP timeout + 0.5 s; the bound under Wine) |
 | `kCancelled` | `Cancel()` or the caller's stop token |
 | `kRedirect` | any 3xx |
 | `kBadKey` | 401 |
@@ -148,4 +156,9 @@ client inside `WinHttpReceiveResponse`; client reusable afterwards), cancel_raci
 0..2 ms around the call start), cancel_stress_two_clients (two clients, own servers, 150 cancel/start
 cycles each over status and downloads; results must carry their own server's data).
 
-CI uploads `mj_net_tests.exe` with the DLL artifact so the same binary can be run under Wine/Proton.
+cancel_clear_interleave (Cancel/ClearCancel from two threads at once, 2000 rounds: a `kCancelled` call never
+sent a request). After EVERY test the harness waits for the live request-context count to return to 0
+(proves `HANDLE_CLOSING` delivery, no context leak), on Windows and under Wine.
+
+CI uploads `mj_net_tests.exe` with the DLL artifact so the same binary can be run under Wine/Proton. CI also
+builds an `/fsanitize=address` copy of `mj_net_tests` and runs it as a separate, non-blocking step.

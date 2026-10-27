@@ -29,6 +29,10 @@
 
 #include "net/HarmonyClient.h"
 
+namespace MJ::Net {
+    long LiveRequestContextsForTests();  // test hook in HarmonyClient.cpp (not in the public header)
+}
+
 using namespace MJ::Net;
 namespace fs = std::filesystem;
 using json   = nlohmann::json;
@@ -1176,6 +1180,59 @@ namespace {
         for (Side& sd : sides) sd.srv->Stop();
     }
 
+    // Cancel()/ClearCancel() racing from two threads (released together by a spin barrier), then a
+    // Status(): a kCancelled result must mean NOTHING was sent (pre-check), and an OK result must have
+    // been sent exactly once. With a flag + event that could disagree, "sent, then cancelled" appeared.
+    void T_CancelClearInterleave() {
+        Server s([](const Req&, Conn& c, int) { c.Send(Resp(200, "OK", R"({"enabled":true})")); });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        std::atomic<int>  phase{ 0 };  // round number both racers wait for
+        std::atomic<int>  done{ 0 };
+        std::atomic<bool> quit{ false };
+        auto racer = [&](bool a_cancel) {
+            for (int round = 1;; ++round) {
+                while (phase.load() < round) {
+                    if (quit.load()) return;
+                }
+                if (a_cancel) cl.Cancel();
+                else cl.ClearCancel();
+                done.fetch_add(1);
+            }
+        };
+        std::thread ra(racer, true);
+        std::thread rb(racer, false);
+        int cancelled = 0, ok = 0;
+        for (int round = 1; round <= 2000 && !g_curFailed; ++round) {
+            done  = 0;
+            phase = round;
+            while (done.load() < 2) {}
+            const std::size_t  before = s.Seen().size();
+            const StatusResult r      = cl.Status();
+            const std::size_t  sent   = s.Seen().size() - before;
+            if (r.error == Error::kCancelled) {
+                ++cancelled;
+                if (sent != 0) Fail(__LINE__, "round " + std::to_string(round), "cancelled after the request was sent");
+            } else if (r.error == Error::kOk) {
+                ++ok;
+                if (sent != 1) Fail(__LINE__, "round " + std::to_string(round), "OK but sent " + std::to_string(sent));
+            } else {
+                Fail(__LINE__, "round " + std::to_string(round), std::string("got ") + ErrorName(r.error) + " (" + r.message + ")");
+            }
+        }
+        quit = true;
+        ra.join();
+        rb.join();
+        std::printf("    (%d ok, %d cancelled)\n", ok, cancelled);
+        CHECK(ok > 0 && cancelled > 0);  // both orders were actually hit
+        cl.ClearCancel();
+        CHECK_ERR(cl.Status(), Error::kOk);
+        cl.Cancel();
+        const std::size_t before = s.Seen().size();
+        CHECK_ERR(cl.Status(), Error::kCancelled);
+        CHECK(s.Seen().size() == before);
+    }
+
     struct TestEntry { const char* name; void (*fn)(); };
 
 }  // namespace
@@ -1232,6 +1289,7 @@ int main() {
         { "stop_token_in_wait_phase", T_StopTokenInWaitPhase },
         { "cancel_racing_start", T_CancelRacingStart },
         { "cancel_stress_two_clients", T_CancelStressTwoClients },
+        { "cancel_clear_interleave", T_CancelClearInterleave },
     };
     for (const auto& t : tests) {
         g_curName   = t.name;
@@ -1243,6 +1301,16 @@ int main() {
             Fail(0, std::string("exception: ") + e.what());
         } catch (...) {
             Fail(0, "unknown exception");
+        }
+        // Every request context must be freed once WinHTTP delivered HANDLE_CLOSING (async; allow 10 s,
+        // e.g. Wine finishing an abandoned send task after the test's server closed).
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            while (MJ::Net::LiveRequestContextsForTests() != 0 && MsSince(t0) < 10000) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            const long live = MJ::Net::LiveRequestContextsForTests();
+            if (live != 0) Fail(0, "request contexts still alive after the test", std::to_string(live));
         }
         std::printf("[ %s ] %s\n", g_curFailed ? "FAIL" : "PASS", t.name);
         std::fflush(stdout);
