@@ -38,10 +38,19 @@ modlist (Requiem, LoreRim...). Instead the plugin edits the winning in-memory MU
    `kCycleTracks` so the engine alternates A/B. A category the player left on "Vanilla" is untouched.
    Open question: a source MUSC with exactly 1 track cannot grow to 2 without allocator work; the
    fallback is pointing `wrapper->track` between two prebuilt single tracks (decide at spike time).
-3. **Prefetch loop**: a read-only poll (SKSE task, ~250 ms) watches `BSMusicManager::current` +
-   `typeStatus`/`currentTrackIndex`. When track N starts in slot X, a worker thread calls `next`,
-   downloads into the other slot (`.tmp` -> verify Content-Length -> rename), reports `playing`.
-   No engine hooks in v1 (lowest crash surface first, MFO BUILD.md ordering).
+3. **Pool of 3 per type (marth 2026-10-27)**: the plugin keeps 3 downloaded tracks ready for every
+   enabled type, in its own cache dir (not the engine's). When a type's music event fires, one of the
+   3 is picked at random (local shuffle), renamed into the idle engine slot (same filesystem, so cheap),
+   and played; a worker then asks `next` for a replacement and downloads it in the background, so the pool
+   is back to 3 new-ish tracks for the next event. Pools are prefilled at game load, enabled types only
+   (combat first: it gives no warning). **`normalize=1` is always on (marth)**; the 29 s cold cost is
+   hidden by the pool, since downloads never block playback.
+   Detection is a read-only poll (SKSE task, ~250 ms) of `BSMusicManager::current` +
+   `typeStatus`/`currentTrackIndex`; slot writes use `.tmp` -> verify Content-Length -> rename; the
+   plugin reports `playing`. No engine hooks in v1 (lowest crash surface first, MFO BUILD.md ordering).
+   Disk: ~25 MB/track x (3 pool + 2 slots) x ~12 types = ~1.5 GB worst case; the cache dir gets an LRU
+   cap setting.
+   Measured on harmony:8080 (2026-10-27): cold+normalize 29 s, cold 6.9 s, cached 0.6 s.
 4. **Never silence the game**: if Harmony is unreachable or the slot is not ready, restore the original
    `tracks` for that MUSC before its next play and log it loudly (a documented degrade, not a mask).
 5. **Network = WinHTTP** (no extra deps, works under Wine/Proton, https for free).
