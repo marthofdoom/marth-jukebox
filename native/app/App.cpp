@@ -445,7 +445,7 @@ namespace MJ::App {
             } else if (plan && !plan->engineWrites) {
                 st.state = "Vanilla (" + plan->why + ")";
             } else if (!r || r->slot < 0) {
-                st.state = plan && r && !r->planned ? "Vanilla (all 24 slots are in use)" : "Vanilla (no game music uses this environment)";
+                st.state = plan && plan->envs.contains(id) ? "Vanilla (all 24 slots are in use)" : "Vanilla (no game music uses this environment)";
             } else {
                 const auto& v       = views[r->slot];
                 const bool  playing = v.owner == id && v.fresh;

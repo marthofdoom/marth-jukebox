@@ -24,6 +24,7 @@ namespace MJ::Pool {
         }
         void MarkDirtyLocked() {
             S().indexDirty = true;
+            S().poolWake   = true;
             S().poolCv.notify_all();
         }
     }
@@ -661,6 +662,7 @@ namespace MJ::Pool {
                     clear                 = s.clearCacheRequested;
                     s.clearCacheRequested = false;
                     cat                   = s.haveCatalogue && ns.planGen == 0;
+                    s.poolWake            = false;
                 }
                 if (dirty) OnSettings(ns);
                 else if (cat) Replan(ns);
@@ -683,7 +685,7 @@ namespace MJ::Pool {
                 if (worked) continue;
                 std::unique_lock lk(s.mx);
                 (void)s.poolCv.wait_for(lk, a_st, 1000ms, [&] {
-                    return s.settingsDirty || s.clearCacheRequested || s.indexDirty || s.store->Revision() != ns.seenRev ||
+                    return s.settingsDirty || s.clearCacheRequested || s.poolWake || s.store->Revision() != ns.seenRev ||
                            (s.haveCatalogue && ns.planGen == 0);
                 });
             }

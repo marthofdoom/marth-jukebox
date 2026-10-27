@@ -256,6 +256,7 @@ Defaults are safe: every environment Vanilla, and the network is off until a ser
 | `CacheDir` | empty | empty = the caller's default (`Data\SKSE\Plugins\MarthJukebox\cache`); <= 520 chars |
 | `CacheCapMB` | 4096 | 256 .. 1048576 (below 256 is raised to 256) |
 | `LogLevel` | `info` | `trace` `debug` `info` `warn` `error` `off` |
+| `AllowQobuz` | 0 | INI only (not in the menu). 1 = a streaming environment may also use Qobuz (`sources=library,ytmusic,qobuz`). Off by default: without a subscription Qobuz serves 30 s previews (DESIGN 8.8) |
 
 ### `[Features]` (kill switches, 1 = on, default all on)
 
@@ -274,8 +275,8 @@ its group, Vanilla included** ("keep this sub vanilla"); no section = the sub in
 | `Selector` | empty | genre or query text; for Artist/Playlist the display label. Loaded up to 1024 chars; Harmony limit (200 characters, no control characters, valid UTF-8) is enforced by the profile builder |
 | `Service` | empty | `local` or `ytmusic` for Artist/Playlist. **`qobuz` and anything else is refused** (Artist/Playlist then fall back to Vanilla; DESIGN 8.8) |
 | `Id` | empty | service id from `/api/search`; <= 256 loaded, <= 200 of `[A-Za-z0-9_.:@+=~\-\[\]]` for Harmony |
-| `AllowStreaming` | 0 | 0 = Harmony `sources=library`; 1 = `sources=all` (YouTube Music; never Qobuz). Passed per `next` call, not part of the profile |
-| `RememberPlace` | 0 | resume position per environment (M3) |
+| `AllowStreaming` | 0 | 0 = Harmony `sources=library`; 1 = `sources=library,ytmusic` (+`,qobuz` only with `[General] AllowQobuz=1`). A Harmony older than 1.0.13 has no source list: streaming then needs AllowQobuz=1 (`all`), else the environment stays on the library. Passed per `next` call (`ChooseSources()`), not part of the profile |
+| `RememberPlace` | 0 | stored and shown; in 1.0 the engine always resumes an interrupted track (its own default), see DESIGN 3 item 4 |
 | `PoolSize` | 3 | 3, 5 or 8; other values snap to the nearest (ties up) |
 
 Limits: at most 128 environment sections are kept.

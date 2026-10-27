@@ -48,10 +48,12 @@ nlohmann-json for replies, spdlog for logging. No engine or CommonLib calls.
 | Call | Request | Returns |
 |------|---------|---------|
 | `Configure(Config)` | validates base URL (`http`/`https`, host, optional port and path prefix; no userinfo, query, IPv6 literal), key (printable ASCII), timeouts | `Result` |
-| `Status()` | `GET /api/game/status` | `StatusResult` {reachable, enabled, ffmpeg, containers (missing => `["wav"]`), cache{bytes,files,inProgressBytes,cap}} |
+| `Status()` | `GET /api/game/status` | `StatusResult` {reachable, enabled, ffmpeg, containers (missing => `["wav"]`), cache{bytes,files,inProgressBytes,cap}, servicesReported + library/ytmusic/qobuzUsable (`services`; its presence = the server takes a `sources` list), excludedServices} |
 | `PutProfile(name, json)` | `PUT /api/game/profiles/{name}` (name validated locally) | `Result` |
 | `Next(profile, type, sources, count, peek, container)` | `POST /api/game/next` (empty `sources`/`container` omitted) | `NextResult` {tracks[], poolSize, type, requestedType, sources}; tracks without id or audio_url are dropped |
-| `Search(query, kinds, limit)` | `GET /api/search?q=..&kinds=..&limit=..` | `SearchResult` {tracks[], artists[], albums[]} (tolerant parse; the endpoint is not in game-source.md) |
+| `Search(query, kinds, limit)` | `GET /api/search?q=..&kinds=..&limit=..` | `SearchResult` {tracks[], artists[], albums[], playlists[]} (tolerant parse; the endpoint is not in game-source.md; the server ignores `limit`) |
+| `LibraryView(view, limit)` | `GET /api/library/view?view=genres\|artists&limit=..` | `BrowseResult` {enabled, items[]}: genres (id = title = name, service `local`), artists (id, name) of the live, federated Library |
+| `Playlists()` | `GET /api/playlists` | `BrowseResult` {items[]}: the signed-in services' own playlists |
 | `ReportPlaying(profile, type, service, id)` | `POST /api/game/playing` `{profile, type, service, id}` (all four required; nothing else, the server rejects unknown keys) | `Result`; best effort: a failure is only a returned error |
 | `DownloadAudio(audio_url, destFile, expectedDurationS, stop_token)` | `GET` the audio URL + `&wait=<n>` | `DownloadResult` {audio info, bytes} |
 | `ProbeAudioFile(path, AudioInfo&)` | none (header parse only) | `Result` |
@@ -142,7 +144,7 @@ logged URL is replaced with `***`.
 test exe does not link CommonLibSSE). A scripted 127.0.0.1 HTTP/1.1 server (Winsock, test-only) answers
 each test; WAV/FLAC fixtures are synthesised in memory. Never contacts a real Harmony.
 
-status_json, status_no_containers_field, next_json, next_404_no_tracks, http_error_mapping (401, 403,
+status_json, status_no_containers_field, status_services, browse, next_json, next_404_no_tracks, http_error_mapping (401, 403,
 404 x4, 400, 413, 502, 503 x4 incl. Retry-After, 504, 500), unreachable, receive_timeout, put_profile,
 search, download_wav_ok, download_replace_and_preserve, download_202_then_200, download_202_deadline,
 download_truncated_body, download_preview_30s_vs_224s, download_flac_streaminfo, download_bad_audio,

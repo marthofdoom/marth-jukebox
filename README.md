@@ -5,3 +5,16 @@ SKSE plugin that replaces Skyrim's music with tracks from your own [Harmony](htt
 Status: design phase. See [DESIGN.md](DESIGN.md). Requires a running Harmony server; ships no audio.
 
 Security note: the personal key is sent with every request. Use an `https://` server URL whenever Harmony is reached from outside your LAN or Tailnet; plain `http://` sends the key in clear text.
+
+## 1.0 notes (core)
+
+- "Remember track place": in 1.0 an interrupted track always resumes (that is the game's own behaviour);
+  the per-environment checkbox is stored but switching it off has no effect yet.
+- Qobuz is never used unless you add `AllowQobuz=1` under `[General]` in `MarthJukebox.ini` (without a
+  subscription Qobuz only serves 30 s previews).
+
+## Credits
+
+- CommonLibSSE-NG (its MIT-licensed fork, from marthofdoom/vcpkg-registry), [nlohmann/json](https://github.com/nlohmann/json) (MIT),
+  [spdlog](https://github.com/gabime/spdlog) (MIT).
+- [dr_flac](https://github.com/mackron/dr_libs) by David Reid (public domain / MIT-0), vendored in `third_party/dr_libs/`.

@@ -66,6 +66,7 @@ namespace MJ::Pool::detail {
 
         ConnReport                  conn;
         bool                        settingsDirty = true;
+        bool                        poolWake = false;   // MarkDirtyLocked / new pool work: wake the pool thread once
         bool                        clearCacheRequested = false;
         PlayedFn                    played;
 
