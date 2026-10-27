@@ -133,3 +133,15 @@ into `default`.
   crash bisects by switching a feature off. Order within the branch: net+pool, then menu, then FLAC and
   remember-place. The engine-dependent design (what happens when the engine re-picks a slot, crossfade,
   resume position) waits for the M0b log; the menu, the Harmony client and the Harmony-side FLAC change do not.
+
+**8.7 Requirement: almost never the same track twice (marth 2026-10-27).** A player who picks a genre should
+essentially never hear a repeat. Two layers:
+- **Harmony (branch `game-pools`)**: deeper streaming candidate lists (paging past 25 per query, a few query
+  variants, mood/genre playlists where the provider allows), cross-service de-duplication, and a bag whose
+  memory survives server restarts and unrelated profile edits. Measured 2026-10-27 on the live server:
+  'folk' sources=all 228 candidates, 'ambient' 40, 'epic battle music orchestral' 56; caps today: streaming
+  search 25 per service, library search 50, library genre 1000, artist 100, pool refresh 10 min.
+- **Plugin**: keeps its own recent-played list (state file, per environment, bounded) and discards a
+  server pick that is already in it, asking `next` again; the pool of N is filled only with tracks not
+  recently played. The menu shows how many distinct tracks a selection can produce (pool size from
+  `next`'s `pool_size`) and warns when it is small ("only 25 tracks: expect repeats").
