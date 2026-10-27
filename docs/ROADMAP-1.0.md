@@ -21,3 +21,13 @@ Parallel, already running: Harmony `game-pools` (variety). Done: Harmony FLAC co
 ## Decisions that block 1.0 and are marth's
 - Updating the production Harmony (harmony:8080) with the merged FLAC work and, later, `game-pools`.
 - Which of FLAC / ADPCM ships (FLAC is built; ADPCM only if the engine accepts it and disk matters).
+
+## 1.0.1 (after 1.0.0 ships)
+- **Mixed mode (marth 2026-10-27): vanilla + the query.** Per environment, a "Mix" option: the environment keeps
+  its vanilla songs AND plays Harmony tracks from the selector, interleaved. Design notes: the in-place retarget
+  already leaves unreplaced entries untouched, so Mix = replace only a share of the replaceable (Single/Palette)
+  entries with the slot wrapper (setting: share 25/50/75%, default 50%; Silent entries kept so the cadence is
+  preserved) and leave the rest vanilla; pool, slot protocol and fallback are unchanged. Menu: a "Mix with vanilla"
+  checkbox + share combo on each environment row. Needs: Settings key (`Mix`, `MixPercent`), SlotAssign/Retarget
+  entry selection (deterministic pick of which entries to replace, stable across sessions), tests, README line.
+  Tier A for the Retarget change (Opus), menu part Sonnet.
