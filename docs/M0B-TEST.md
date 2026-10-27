@@ -22,9 +22,21 @@ M0b is the first build that **changes** the game. It does three things, all hard
 3. Make sure `SKSE/Plugins/MarthJukebox.noretarget` does **not** exist (see Kill switch).
 
 The first time a slot is rewritten, the plugin first copies your original to `explore_a.wav.orig` /
-`explore_b.wav.orig` beside it. To get your test music back after the test, delete the `.wav` and rename the
-`.orig` back. Under MO2 the new files (`.orig`, possibly `.tmp`) may appear in the **overwrite** folder
-instead of the mod folder; that is expected and part of what the test shows.
+`explore_b.wav.orig` (it never overwrites an existing `.orig`). Under MO2 (USVFS) the files land in different
+places:
+
+- the rename **physically replaces** `mods/<mod>/Music/Harmony/explore_X.wav` (your test WAV in the mod folder);
+- the `.orig` backup and any leftover `.tmp` are new files, so they land in `overwrite/Music/Harmony/`.
+
+**Recovery after the test** (for each slot X that was rewritten, i.e. has a `.orig`):
+
+1. Quit the game first.
+2. Move `overwrite/Music/Harmony/explore_X.wav.orig` over `mods/<mod>/Music/Harmony/explore_X.wav`
+   (replace it, and drop the `.orig` suffix).
+3. Delete any `explore_*.wav.tmp` and `explore_*.wav.orig` still left in `overwrite/Music/Harmony/`.
+
+The `.orig` is the only copy the plugin keeps. If you have another copy of your test WAV elsewhere you can use
+that instead.
 
 ## In game
 
@@ -46,7 +58,9 @@ changes, a freeze, a crash.
 
 Create an empty file `SKSE/Plugins/MarthJukebox.noretarget` (in the mod folder or the game's
 `Data/SKSE/Plugins/`) to turn the retarget off. Checked at load; while the game runs it is checked every
-2 s, and if anything was replaced the original songs are put back as soon as Tundra music is not playing.
+2 s. If anything was replaced, the original songs are put back at the next 250 ms watcher tick where
+`MUSExploreTundra` is neither the current music type nor anywhere in the music queue (and its status is
+Inactive or Finished). While it is current or queued (e.g. paused under combat music) nothing is changed.
 Delete the file to turn the retarget on again (from the next game start).
 
 ## What to send back
@@ -86,6 +100,16 @@ then the first `now-playing ... type=MUSExploreTundra ... trackIndex=I` and the 
 The sequence of `[probe] now-playing ... type=MUSExploreTundra ... wrapper=A|B|vanilla(...)` lines (Silent entries
 show as `vanilla(...) inner=Silent`).
 
+**Settle rule (applies to (e) and (f)).** `Finished` does not mean the engine has closed the file: with
+Tundra's `fadeTime` of 12 s the track is marked Finished at the start of its fade-out. So a slot is only
+rewritten after its track has been **continuously Inactive/Finished for fadeTime + 1 s** (13 s for Tundra;
+the value is read from the music type, not hardcoded). Lines: `[slots] slot X settling (N s left; idle I ms of
+S ms = fadeTime + 1 s)` once while it waits, then `[slots] refresh of X queued`, and the worker's rename line
+ends with `(... slot Finished for I ms at the pre-rename check, settle S ms)`: the real idle time when the file
+was replaced. The pre-rename check uses the status the watcher last published (up to 250 ms old plus queue
+time), so it is not proof that the engine has not reopened the file; the rename itself is atomic. A refresh
+that fails the check logs `not renamed` / `skipped ... never write a busy or unsettled slot`.
+
 **(e) Is a playing file locked for writing?**
 `[slots] lock probe (plugin start): open ...explore_a.wav for write OK|FAILED, Win32 error E` and
 `[slots] lock probe (A is Playing): ...`. OK at start and FAILED (error 32 = sharing violation) while playing
@@ -96,7 +120,9 @@ show as `vanilla(...) inner=Silent`).
 `now-playing ... wrapper=B` with `pos` lines: a 15 s tone gives a track that ends after about 15 s
 (`lastKnownPlaybackPosition` stops near 15000 if it is in ms, and B's status goes to Finishing/Finished),
 your 133 s music would run on. Your ear (sine tone) confirms it. Failures show as `rename ... FAILED, Win32
-error E` (5 = access denied, 32 = sharing violation, 17 = not same device).
+error E` (5 = access denied, 32 = sharing violation, 17 = not same device). Read it together with the idle time
+on the rename line (settle rule above): a stutter or the old music right after a rename that happened only
+just past the settle time points at the engine still holding the file.
 
 **(g) Crash / hang / stutter around the swap?**
 Compare your noted times with `[retarget] ... replaced=...` and `[slots] refresh ...` lines (each step logs

@@ -31,6 +31,12 @@ namespace MJ::Slots {
 
         // Slot inner-track status as published by the main thread (MUSIC_STATUS values).
         std::atomic<std::uint32_t> g_status[2]{};
+        // Settle rule (review F2), published by the main thread with the status: SteadyMs()
+        // when the slot's current Inactive/Finished run began (-1 while busy), and the
+        // required settle time (the type's fadeTime + 1 s). Three separate atomics: a read
+        // may mix two consecutive ticks, which only matters at a busy/idle edge.
+        std::atomic<long long>     g_idleSince[2]{ -1, -1 };
+        std::atomic<long long>     g_settleMs[2]{ 0, 0 };
         std::atomic<bool>          g_kill{ false };
         std::atomic<bool>          g_refreshQueued[2]{};
 
@@ -57,6 +63,17 @@ namespace MJ::Slots {
 
         // Playing / Paused / Finishing: the engine may hold the file open.
         bool Busy(std::uint32_t a_st) { return a_st == 1 || a_st == 2 || a_st == 3; }
+
+        // Idle (not Playing/Paused/Finishing) and idle for at least the settle time, per the
+        // last values the main thread published (up to one 250 ms tick old, plus the time
+        // this job waited in the queue).
+        bool Settled(int a_slot, std::uint32_t& a_st, long long& a_idleFor, long long& a_settle) {
+            a_st                  = g_status[a_slot].load();
+            const long long since = g_idleSince[a_slot].load();
+            a_settle              = g_settleMs[a_slot].load();
+            a_idleFor             = since < 0 ? -1 : SteadyMs() - since;
+            return !Busy(a_st) && since >= 0 && a_idleFor >= a_settle;
+        }
 
         long long MsSince(std::chrono::steady_clock::time_point a_t) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - a_t).count();
@@ -143,8 +160,11 @@ namespace MJ::Slots {
                 spdlog::info("[slots] refresh #{} of {}: skipped, kill switch", a_n, kSlotName[a_slot]);
                 return;
             }
-            if (const auto st = g_status[a_slot].load(); Busy(st)) {
-                spdlog::warn("[slots] refresh #{} of {}: skipped, slot is {} (never write a busy slot)", a_n, kSlotName[a_slot], StatusName(st));
+            std::uint32_t st      = 0;
+            long long     idleFor = 0, settle = 0;
+            if (!Settled(a_slot, st, idleFor, settle)) {
+                spdlog::warn("[slots] refresh #{} of {}: skipped, slot is {} idle {} ms of {} ms settle (never write a busy or unsettled slot)",
+                             a_n, kSlotName[a_slot], StatusName(st), idleFor, settle);
                 return;
             }
 
@@ -213,9 +233,15 @@ namespace MJ::Slots {
             }
             spdlog::info("[slots] refresh #{} of {}: verified {} bytes (+{}ms)", a_n, kSlotName[a_slot], size, MsSince(t0));
 
-            // 5. Rename over the slot, re-checking the slot is still idle right before.
-            if (const auto st = g_status[a_slot].load(); Busy(st)) {
-                spdlog::warn("[slots] refresh #{} of {}: slot became {} before the rename; not renamed", a_n, kSlotName[a_slot], StatusName(st));
+            // 5. Rename over the slot. Re-check, from the published atomics, that the slot is
+            //    still idle and settled. Those values are up to one watcher tick (250 ms) old
+            //    plus queue latency, so this is not a guarantee that the engine has not opened
+            //    the file since; what keeps a race harmless is that the rename is atomic (a
+            //    reader sees the whole old file or the whole new one).
+            if (!Settled(a_slot, st, idleFor, settle)) {
+                spdlog::warn("[slots] refresh #{} of {}: at the pre-rename check (as last published) the slot was {} idle {} ms of {} ms "
+                             "settle; not renamed",
+                             a_n, kSlotName[a_slot], StatusName(st), idleFor, settle);
                 return;
             }
             if (!::MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING)) {
@@ -223,8 +249,9 @@ namespace MJ::Slots {
                               Utf8(dst), ::GetLastError(), MsSince(t0));
                 return;
             }
-            spdlog::info("[slots] refresh #{} of {}: renamed over {} -> slot now holds the {:.0f} Hz test tone (total {}ms)", a_n,
-                         kSlotName[a_slot], Utf8(dst), hz, MsSince(t0));
+            spdlog::info("[slots] refresh #{} of {}: renamed over {} -> slot now holds the {:.0f} Hz test tone (total {}ms; slot {} "
+                         "for {} ms at the pre-rename check, settle {} ms)",
+                         a_n, kSlotName[a_slot], Utf8(dst), hz, MsSince(t0), StatusName(st), idleFor, settle);
         }
 
         void Enqueue(Job a_job) {
@@ -312,7 +339,15 @@ namespace MJ::Slots {
         Enqueue({ Job::Kind::kLockProbe, 0, "plugin start" });
     }
 
-    void PublishStatus(int a_slot, std::uint32_t a_status) { g_status[a_slot].store(a_status); }
+    long long SteadyMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    void PublishStatus(int a_slot, std::uint32_t a_status, long long a_idleSinceMs, long long a_settleMs) {
+        g_idleSince[a_slot].store(a_idleSinceMs);
+        g_settleMs[a_slot].store(a_settleMs);
+        g_status[a_slot].store(a_status);
+    }
 
     void RequestRefresh(int a_slot) {
         if (g_refreshQueued[a_slot].exchange(true)) {

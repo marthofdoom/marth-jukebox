@@ -21,11 +21,17 @@ namespace MJ::Slots {
     // start-up write-lock probe of slot A.
     void Start();
 
-    // Main thread, every tick: the slot's INNER track status (BSIMusicTrack::MUSIC_STATUS).
-    void PublishStatus(int a_slot, std::uint32_t a_status);
+    // steady_clock in ms (shared by the main thread and the worker for the settle rule).
+    long long SteadyMs();
+
+    // Main thread, every tick: the slot's INNER track status (BSIMusicTrack::MUSIC_STATUS),
+    // the SteadyMs() at which its current Inactive/Finished run began (-1 while busy), and
+    // the settle time required before the slot file may be replaced (fadeTime + 1 s).
+    void PublishStatus(int a_slot, std::uint32_t a_status, long long a_idleSinceMs, long long a_settleMs);
 
     // Main thread. Queue a refresh of a slot (sine WAV -> .tmp -> verify -> rename).
-    // The caller only requests an idle slot; the worker re-checks before it writes.
+    // The caller only requests a settled slot; the worker re-checks (from the published
+    // atomics) before it writes and before the rename.
     void RequestRefresh(int a_slot);
 
     // Main thread. Queue a write-open probe of the slot file (no write, no truncate).

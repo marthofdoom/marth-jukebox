@@ -262,7 +262,7 @@ namespace MJ::Probe {
         }
 
         // Every >=1000 ms while MUSExploreTundra is current or one of our wrappers is the
-        // current track: the inner single track's playback fields (DESIGN.md 8.1).
+        // current track: the inner single track's playback fields (DESIGN.md (main) section 8.1).
         long long g_lastPosMs{ -1000000 };
 
         void LogPosition(const State& a_s) {

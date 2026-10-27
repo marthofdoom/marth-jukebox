@@ -1,4 +1,4 @@
-// M0b retarget spike. See Retarget.h and DESIGN.md 8.6.
+// M0b retarget spike. See Retarget.h and DESIGN.md (main) section 8.6.
 //
 // ENGINE-MEMORY WRITES in this file (and nowhere else in the plugin):
 //   Apply()   : tracks[i] = our wrapper's BSIMusicTrack subobject   (replace)
@@ -54,6 +54,12 @@ namespace MJ::Retarget {
 
         std::uint32_t g_prevSlotStatus[2]{ kInactive, kInactive };
         bool          g_wantRefresh[2]{ false, false };
+        // Settle rule (review F2): Finished does not mean the file is closed (the audio still
+        // fades out for fadeTime). A slot is refreshed only after its inner track has been
+        // continuously Inactive/Finished for the type's fadeTime + 1 s. g_idleSince is the
+        // steady-clock ms (Slots::SteadyMs) when that idle run started, -1 while busy.
+        long long g_idleSince[2]{ -1, -1 };
+        bool      g_settleLogged[2]{ false, false };
 
         const char* StatusName(std::uint32_t a_v) {
             switch (a_v) {
@@ -100,8 +106,12 @@ namespace MJ::Retarget {
             }
         }
 
-        // The write precondition (DESIGN constraint 2): the type is not the current type,
-        // not anywhere in the music queue, and its own status is Inactive.
+        // The write precondition (DESIGN constraint 2, relaxed per review F1): the type is
+        // not the current type, not anywhere in the music queue, and its own status is
+        // Inactive or Finished. In the 1.6.1170 binary a type that stops being current
+        // keeps typeStatus Finishing/Finished until DoPrepare (when it becomes current
+        // again) resets it to Inactive, and nothing reads a non-queued type's tracks, so
+        // Finished + not current + not queued is idle. Finishing is still refused.
         bool IsSafe(std::string& a_why) {
             const auto* mgr = RE::BSMusicManager::GetSingleton();
             if (!mgr) {
@@ -118,7 +128,7 @@ namespace MJ::Retarget {
                     return false;
                 }
             }
-            if (const auto st = g_target->typeStatus.underlying(); st != kInactive) {
+            if (const auto st = g_target->typeStatus.underlying(); st != kInactive && st != kFinished) {
                 a_why = std::format("typeStatus={}", StatusName(st));
                 return false;
             }
@@ -183,12 +193,31 @@ namespace MJ::Retarget {
                          Probe::NowMs());
         }
 
-        // Main thread. Our two inner tracks' status -> worker atomics; refresh triggers.
+        bool Idle(std::uint32_t a_st) { return a_st == kInactive || a_st == kFinished; }
+
+        // fadeTime (BSIMusicType +0x10, seconds) + 1 s, in ms; clamped to [1 s, 61 s].
+        long long SettleMs() {
+            float f = g_target->fadeTime;
+            if (!(f >= 0.0f)) f = 0.0f;  // also catches NaN
+            if (f > 60.0f) f = 60.0f;
+            return static_cast<long long>(f * 1000.0f) + 1000;
+        }
+
+        // Main thread. Our two inner tracks' status (+ idle-since, settle time) -> worker
+        // atomics; refresh triggers.
         void TickSlots() {
-            std::uint32_t st[2]{};
+            const long long now    = Slots::SteadyMs();
+            const long long settle = SettleMs();
+            std::uint32_t   st[2]{};
             for (int s = 0; s < 2; ++s) {
                 st[s] = g_wrapper[s]->track->trackStatus.underlying();
-                Slots::PublishStatus(s, st[s]);
+                if (!Idle(st[s])) {
+                    g_idleSince[s]    = -1;
+                    g_settleLogged[s] = false;
+                } else if (g_idleSince[s] < 0) {
+                    g_idleSince[s] = now;  // first tick of this idle run
+                }
+                Slots::PublishStatus(s, st[s], g_idleSince[s], settle);
             }
             for (int s = 0; s < 2; ++s) {
                 if (st[s] == g_prevSlotStatus[s]) continue;
@@ -203,10 +232,19 @@ namespace MJ::Retarget {
                 g_prevSlotStatus[s] = st[s];
             }
             for (int s = 0; s < 2; ++s) {
-                if (g_wantRefresh[s] && (st[s] == kInactive || st[s] == kFinished)) {
-                    g_wantRefresh[s] = false;
-                    Slots::RequestRefresh(s);
+                if (!g_wantRefresh[s] || g_idleSince[s] < 0) continue;
+                const long long idleFor = now - g_idleSince[s];
+                if (idleFor < settle) {
+                    if (!g_settleLogged[s]) {
+                        spdlog::info("[slots] slot {} settling ({} s left; idle {} ms of {} ms = fadeTime + 1 s)", kSlotName[s],
+                                     (settle - idleFor + 999) / 1000, idleFor, settle);
+                        g_settleLogged[s] = true;
+                    }
+                    continue;
                 }
+                g_wantRefresh[s]  = false;
+                g_settleLogged[s] = false;
+                Slots::RequestRefresh(s);
             }
         }
 
@@ -269,7 +307,8 @@ namespace MJ::Retarget {
         }
         g_ready = true;
         Slots::Start();
-        spdlog::info("[retarget] ready; writes happen only in the watcher task while the type is inactive and not queued");
+        spdlog::info("[retarget] ready; writes happen only in the watcher task while the type is not current, not queued, "
+                     "and Inactive/Finished");
     }
 
     void OnMessage(std::uint32_t a_type) {

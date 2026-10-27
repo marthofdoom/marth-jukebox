@@ -3,8 +3,9 @@
 // M0b retarget spike (hardcoded): MUSExploreTundra's Single/Palette track entries are
 // replaced IN PLACE by our two slot wrappers (MarthJukebox.esp 0x800 = A, 0x801 = B).
 // Silent entries, other entries and the array size are never touched. Writes happen
-// only in Tick(), on the main thread, while the type is inactive and not queued.
-// Kill switch: Data/SKSE/Plugins/MarthJukebox.noretarget. See DESIGN.md 8.6.
+// only in Tick(), on the main thread, while the type is neither current nor queued
+// and its typeStatus is Inactive or Finished.
+// Kill switch: Data/SKSE/Plugins/MarthJukebox.noretarget. See DESIGN.md (main) section 8.6.
 namespace MJ::Retarget {
 
     // Main thread, at kDataLoaded, AFTER Probe::OnDataLoaded (needs its identity map).
