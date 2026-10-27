@@ -249,9 +249,7 @@ namespace MJ::Menu
 		fresh.poolSize = CurrentPoolSize(a_settings);
 		if (const auto parent = ParentOf(a_envId); !parent.empty()) {
 			if (const auto* p = a_settings.Find(parent)) {
-				fresh.allowStreaming = p->allowStreaming;
-				fresh.rememberPlace = p->rememberPlace;
-				fresh.poolSize = p->poolSize;
+				fresh = *p;  // an INHERITING sub must keep resolving to the parent's music (mode and selection included)
 			}
 		}
 		return a_settings.environments.emplace(a_envId, std::move(fresh)).first->second;
@@ -310,6 +308,11 @@ namespace MJ::Menu
 		if (std::find(std::begin(mj::config::kPoolSizes), std::end(mj::config::kPoolSizes), a_size) == std::end(mj::config::kPoolSizes)) {
 			return;
 		}
+		if (a_settings.environments.empty()) {
+			// Fresh setup: no entry carries the size yet. A Vanilla stub (equivalent to no entry for the profile and the
+			// retargeter) persists it in the INI, and CurrentPoolSize / EnsureEntry hand it to every later entry.
+			EnsureEntry(a_settings, "explore");
+		}
 		for (auto& [id, e] : a_settings.environments) {
 			e.poolSize = a_size;
 		}
@@ -361,10 +364,14 @@ namespace MJ::Menu
 		return !a_hit.id.empty();
 	}
 
-	std::vector<App::SearchHit> FilterHits(const std::vector<App::SearchHit>& a_hits, Mode a_mode, bool a_allowStreaming)
+	std::vector<App::SearchHit> FilterHits(const std::vector<App::SearchHit>& a_hits, Mode a_mode, bool a_allowStreaming,
+		std::size_t a_max)
 	{
 		std::vector<App::SearchHit> out;
 		for (const auto& h : a_hits) {
+			if (out.size() >= a_max) {
+				break;
+			}
 			if (HitUsable(h, a_mode, a_allowStreaming)) {
 				out.push_back(h);
 			}
@@ -410,24 +417,49 @@ namespace MJ::Menu
 
 	const std::vector<Preset>& Presets()
 	{
-		// Genre selectors only (spec). The names are Harmony library genres; a genre the library lacks simply gives an
-		// empty pool, which the status line reports and the core degrades to vanilla.
+		// Genre selectors only. The names are genres that exist in the live Harmony library (checked 2026-10-27: Soundtrack,
+		// Orchestral, Symphony, Folk, Solo Piano, Choral...). Libraries differ, so the page also checks them against the
+		// server's genre list when it has one (MissingPresetGenres) and tells the user which are absent.
 		static const std::vector<Preset> kPresets = {
 			{ "calm_epic", "Calm exploration + epic combat",
-			  "Ambient music while travelling, epic music in fights and boss battles.",
-			  { { "explore", Mode::Genre, "Ambient" },
-				{ "combat", Mode::Genre, "Epic" },
-				{ "boss", Mode::Genre, "Epic" } } },
+			  "Soundtrack music while travelling, orchestral music in fights and boss battles.",
+			  { { "explore", Mode::Genre, "Soundtrack" },
+				{ "combat", Mode::Genre, "Orchestral" },
+				{ "boss", Mode::Genre, "Orchestral" } } },
 			{ "folk_journey", "Folk journey",
-			  "Folk music on the road and in towns, dark ambient underground.",
+			  "Folk music on the road and in towns, symphonic music underground.",
 			  { { "explore", Mode::Genre, "Folk" },
 				{ "town", Mode::Genre, "Folk" },
-				{ "dungeon", Mode::Genre, "Dark Ambient" } } },
+				{ "dungeon", Mode::Genre, "Symphony" } } },
 			{ "vanilla", "Back to vanilla",
 			  "Every environment returns to the original Skyrim music.",
 			  {} },
 		};
 		return kPresets;
+	}
+
+	std::vector<std::string> MissingPresetGenres(const Preset& a_preset, const std::vector<App::SearchHit>& a_genres)
+	{
+		std::vector<std::string> missing;
+		if (a_genres.empty()) {
+			return missing;  // no list to compare against: say nothing
+		}
+		for (const auto& entry : a_preset.entries) {
+			if (entry.mode != Mode::Genre) {
+				continue;
+			}
+			bool found = false;
+			for (const auto& g : a_genres) {
+				if (g.kind == "genre" && (mj::categories::EqualsNoCase(g.id, entry.selector) || mj::categories::EqualsNoCase(g.title, entry.selector))) {
+					found = true;
+					break;
+				}
+			}
+			if (!found && std::find(missing.begin(), missing.end(), entry.selector) == missing.end()) {
+				missing.emplace_back(entry.selector);
+			}
+		}
+		return missing;
 	}
 
 	const Preset* FindPreset(std::string_view a_id)
@@ -477,13 +509,29 @@ namespace MJ::Menu
 
 	// ---- first run ----------------------------------------------------------------------------------------
 
-	FirstRun ComputeFirstRun(const Settings& a_settings, const App::Connection& a_conn)
+	FirstRun ComputeFirstRun(const Settings& a_settings, const App::Connection& a_conn, const std::vector<App::EnvStatus>* a_status)
 	{
 		FirstRun r;
 		r.step1Done = !a_settings.global.serverUrl.empty() && !a_settings.global.personalKey.empty();
 		r.step2Done = a_conn.state == App::ConnState::Ok;
-		r.step3Done = std::any_of(a_settings.environments.begin(), a_settings.environments.end(),
-			[](const auto& kv) { return kv.second.mode != Mode::Vanilla; });
+		// Step 3 needs a REAL selection: not Vanilla, not an empty selector, not a typed artist/playlist without its link.
+		r.step3Done = std::any_of(a_settings.environments.begin(), a_settings.environments.end(), [](const auto& kv) {
+			return kv.second.mode != Mode::Vanilla && !kv.second.selector.empty() && !NeedsLink(kv.second);
+		});
+		// ...and when the core reports on the active environments, not all of them may be known-empty.
+		if (r.step3Done && a_status) {
+			bool anyActive = false;
+			bool anyReady = false;
+			for (const auto& st : *a_status) {
+				if (st.active) {
+					anyActive = true;
+					anyReady = anyReady || st.ready > 0;
+				}
+			}
+			if (anyActive && !anyReady) {
+				r.step3Done = false;
+			}
+		}
 		r.current = !r.step1Done ? 0 : !r.step2Done ? 1 : !r.step3Done ? 2 : 3;
 		return r;
 	}

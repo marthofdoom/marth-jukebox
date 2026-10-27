@@ -60,6 +60,17 @@ namespace MJ::Menu
 			std::map<std::string, std::vector<std::string>> peekCache;
 
 			ConfirmGate clearCacheGate;
+			ConfirmGate vanillaGate;
+
+			// library genre list (a browse search), used to tell which preset genres are missing
+			std::vector<App::SearchHit> genreList;
+			bool          genreWanted   = false;  // a genre browse was requested and its result is awaited
+			bool          genreAsked    = false;  // asked once automatically after the first successful connection
+			std::uint64_t genreSeq      = 0;
+
+			// filtered suggestions, rebuilt only when the inputs change (not every frame)
+			std::string                 hitsKey;
+			std::vector<App::SearchHit> hits;
 			std::string note;  // one-line feedback ("Preset applied: ...")
 
 			// cached App state (refreshed every 250 ms)
@@ -158,6 +169,19 @@ namespace MJ::Menu
 			App::SearchAsync(std::string(kind), a_text, a_streaming);
 		}
 
+		// Library genres for the preset check. Shares the core's single search slot, so it is only asked for when the user
+		// presses the button or once after a successful connection test.
+		void RequestGenreList()
+		{
+			auto& s = S();
+			s.genreWanted = true;
+			s.genreAsked = true;
+			s.genreSeq = s.search.seq;
+			s.searchEnv.clear();
+			s.searchDebounce.Cancel();
+			App::SearchAsync("genre", "", false);
+		}
+
 		void RefreshCaches(std::uint64_t a_now, bool a_force)
 		{
 			auto& s = S();
@@ -168,6 +192,15 @@ namespace MJ::Menu
 			s.conn = App::GetConnection();
 			s.status = App::GetEnvStatus();
 			s.search = App::GetSearch();
+			if (s.genreWanted && !s.search.busy && s.search.seq != s.genreSeq) {
+				s.genreWanted = false;
+				s.genreList.clear();
+				for (const auto& h : s.search.hits) {
+					if (h.kind == "genre") {
+						s.genreList.push_back(h);
+					}
+				}
+			}
 			s.cacheBytes = App::CacheBytes();
 			for (auto& [id, wanted] : s.peekWanted) {
 				if (wanted) {
@@ -241,15 +274,37 @@ namespace MJ::Menu
 			auto& s = S();
 			UI::SeparatorText("Presets");
 			Wrapped("A preset only sets the music source of some environments. You can change anything afterwards.");
+			if (s.conn.state == App::ConnState::Ok && !s.genreAsked) {
+				RequestGenreList();
+			}
 			for (const auto& p : Presets()) {
-				if (UI::Button(p.label)) {
+				const bool isVanilla = std::string_view(p.id) == "vanilla";
+				const bool armed = isVanilla && s.vanillaGate.Armed(NowMs());
+				const std::string label = armed ? std::string("Click again to put every environment back to vanilla") : std::string(p.label);
+				bool apply = false;
+				if (UI::Button((label + "##preset_" + p.id).c_str())) {
+					apply = isVanilla ? s.vanillaGate.Press(NowMs()) : true;
+				}
+				Tooltip(p.description);
+				if (apply) {
 					const std::string id = p.id;
 					Change([&](Settings& st) { ApplyPreset(st, id); });
 					s.searchEnv.clear();
+					s.queryText.clear();
 					s.note = std::string("Applied preset: ") + p.label;
 				}
-				Tooltip(p.description);
+				if (const auto missing = MissingPresetGenres(p, s.genreList); !missing.empty()) {
+					std::string m = "Not in your library: ";
+					for (std::size_t k = 0; k < missing.size(); ++k) {
+						m += (k ? ", " : "") + missing[k];
+					}
+					Colored(kWarn, m + ". Those environments will have no tracks until you pick another genre.");
+				}
 			}
+			if (UI::Button("Check preset genres against the server")) {
+				RequestGenreList();
+			}
+			Tooltip("Asks the server for its genre list so the presets can tell you which genres your library lacks.");
 			if (!s.note.empty()) {
 				Colored(kGood, s.note);
 			}
@@ -327,7 +382,13 @@ namespace MJ::Menu
 						if (!s.search.error.empty()) {
 							Colored(kBad, s.search.error);
 						}
-						const auto hits = FilterHits(s.search.hits, curMode, streaming);
+						const std::string key = std::to_string(s.search.seq) + "|" + a_row.id + "|" +
+							std::to_string(static_cast<int>(curMode)) + (streaming ? "|s" : "|l");
+						if (key != s.hitsKey) {
+							s.hitsKey = key;
+							s.hits = FilterHits(s.search.hits, curMode, streaming);  // capped at kMaxSuggestions
+						}
+						const auto& hits = s.hits;
 						UI::TextColored(kDim, "%s", "Suggestions (optional)");
 						if (UI::BeginListBox("##results", UI::ImVec2{ 0.0f, 170.0f })) {
 							for (std::size_t i = 0; i < hits.size(); ++i) {
@@ -495,7 +556,7 @@ namespace MJ::Menu
 				}
 				UI::EndCombo();
 			}
-			Colored(kDim, "The log is MarthJukebox.log next to the plugin. The menu itself can only be switched off in the INI, so this page can never lock you out.");
+			Colored(kDim, "The log is MarthJukebox.log next to the plugin. The page itself is switched off with [Features] Menu=0 in the INI.");
 		}
 
 		// ---- the registered callbacks ---------------------------------------------------------------------------
@@ -509,10 +570,15 @@ namespace MJ::Menu
 			}
 			auto& s = S();
 			const auto now = NowMs();
-			RefreshCaches(now, s.lastRefreshMs == 0);
 
 			const auto snap = store->Snapshot();
 			const Settings& set = *snap;
+			if (!set.global.features.menu) {
+				// [Features] Menu=0: the INI switch turns the page off (it stays registered, it just draws this).
+				UI::TextWrapped("%s", "The settings page is switched off in MarthJukebox.ini ([Features] Menu=0). Set it to 1 and restart to use it.");
+				return;
+			}
+			RefreshCaches(now, s.lastRefreshMs == 0);
 
 			// Search debounce: fires once, 400 ms after the last keystroke.
 			if (s.searchDebounce.Poll(now, kSearchDebounceMs) && !s.searchEnv.empty()) {
@@ -531,7 +597,7 @@ namespace MJ::Menu
 				}
 			}
 
-			const auto fr = ComputeFirstRun(set, s.conn);
+			const auto fr = ComputeFirstRun(set, s.conn, &s.status);
 			if (fr.current < 3) {
 				UI::SeparatorText("First-time setup");
 				DrawSteps(fr);
@@ -548,6 +614,7 @@ namespace MJ::Menu
 		{
 			if (a_type == SKSEMenuFramework::Model::kCloseMenu) {
 				std::lock_guard lk(g_pageMutex);
+				S().showKey = false;  // the key is masked again the next time the panel opens
 				if (g_store.load()) {
 					CommitTextFields();
 				}
@@ -557,7 +624,7 @@ namespace MJ::Menu
 
 	void SetStore(SettingsStore* a_store)
 	{
-		g_store.store(a_store);
+		// The queue first, THEN the store: once the page can see a store, edits may Request() immediately.
 		if (a_store && !g_queue.load()) {
 			// Save + apply on a worker. Deliberately leaked: joining a thread during process teardown can deadlock.
 			g_queue.store(new ApplyQueue([]() -> std::string {
@@ -577,22 +644,37 @@ namespace MJ::Menu
 				return err.empty() ? std::string("the settings file could not be written") : err;
 			}));
 		}
+		g_store.store(a_store);
 	}
 
 	void Register()
 	{
-		if (!SKSEMenuFramework::IsInstalled()) {
-			spdlog::warn("[menu] SKSE Menu Framework not installed (Data/SKSE/Plugins/SKSEMenuFramework.dll missing): settings page not registered, "
+		// Module check, not the header's IsInstalled(): that one tests a path relative to the working directory.
+		if (!GetMenuFrameworkModule()) {
+			spdlog::warn("[menu] SKSE Menu Framework is not loaded (module SKSEMenuFramework not found): settings page not registered, "
 						 "the mod runs on MarthJukebox.ini");
 			return;
 		}
-		const float version = SKSEMenuFramework::GetMenuFrameworkVersion();
-		if (version <= 0.0f) {
-			spdlog::error("[menu] SKSE Menu Framework file present but GetMenuFrameworkVersion() returned {}: framework not loaded, "
-						  "settings page not registered", version);
-			return;
+		// Export gate. Every header wrapper calls GetProcAddress and then calls the result WITHOUT a null check, so a
+		// framework version that lacks one of the exports we draw with would crash the game the first time the page opens.
+		// Refuse to register, loudly, naming the export.
+		static constexpr const char* kRequiredExports[] = {
+			"GetMenuFrameworkVersion", "AddSectionItem", "RegisterEventPriority",
+			"igButton", "igCheckbox", "igInputTextWithHint", "igBeginCombo", "igEndCombo", "igSelectable_Bool",
+			"igBeginListBox", "igEndListBox", "igTextV", "igTextColoredV", "igTextWrappedV", "igSeparatorText",
+			"igCollapsingHeader_TreeNodeFlags", "igTreeNode_Str", "igTreePop", "igSameLine", "igPushID_Str", "igPopID",
+			"igSetNextItemWidth", "igBeginDisabled", "igEndDisabled", "igIsItemDeactivatedAfterEdit", "igIsItemHovered",
+			"igSetItemTooltipV",
+		};
+		for (const char* name : kRequiredExports) {
+			if (!GetMenuFrameworkFunction<void*>(name)) {
+				spdlog::error("[menu] SKSE Menu Framework lacks the export '{}' that the settings page needs (framework too old or "
+							  "changed): settings page NOT registered; the mod runs on MarthJukebox.ini", name);
+				return;
+			}
 		}
-		spdlog::info("[menu] SKSE Menu Framework version {}", version);
+		const auto versionFn = GetMenuFrameworkFunction<float (*)()>("GetMenuFrameworkVersion");
+		spdlog::info("[menu] SKSE Menu Framework version {}", versionFn());
 		SKSEMenuFramework::SetSection("marth's Jukebox");
 		SKSEMenuFramework::AddSectionItem("Settings", Render);
 		SKSEMenuFramework::AddEvent(OnMenuEvent, 0.0f);

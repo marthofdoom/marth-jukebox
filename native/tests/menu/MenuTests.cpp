@@ -360,9 +360,9 @@ MJ_TEST(Presets_ApplySetsFieldsOnlyAndDropsSubOverrides)
 	s.global.personalKey = "k";
 
 	MJ_CHECK(ApplyPreset(s, "calm_epic"));
-	MJ_CHECK(s.Find("explore")->mode == Mode::Genre && s.Find("explore")->selector == "Ambient");
-	MJ_CHECK(s.Find("combat")->mode == Mode::Genre && s.Find("combat")->selector == "Epic");
-	MJ_CHECK(s.Find("boss")->selector == "Epic");
+	MJ_CHECK(s.Find("explore")->mode == Mode::Genre && s.Find("explore")->selector == "Soundtrack");
+	MJ_CHECK(s.Find("combat")->mode == Mode::Genre && s.Find("combat")->selector == "Orchestral");
+	MJ_CHECK(s.Find("boss")->selector == "Orchestral");
 	MJ_CHECK(s.Find("explore.snow") == nullptr);
 	MJ_CHECK(s.Find("explore")->allowStreaming);           // flags untouched
 	MJ_CHECK(s.Find("combat")->poolSize == 5);             // new entries follow the pool size
@@ -390,7 +390,7 @@ MJ_TEST(Presets_SurviveSanitize)
 	mj::config::Diagnostics diag;
 	mj::config::Sanitize(s, diag);
 	MJ_CHECK(s.Find("explore") && s.Find("explore")->selector == "Folk");
-	MJ_CHECK(s.Find("dungeon") && s.Find("dungeon")->selector == "Dark Ambient");
+	MJ_CHECK(s.Find("dungeon") && s.Find("dungeon")->selector == "Symphony");
 }
 
 // ---- first run / status text -------------------------------------------------------------------------------
@@ -413,10 +413,79 @@ MJ_TEST(FirstRun_StepsInOrder)
 	fr = ComputeFirstRun(s, conn);
 	MJ_CHECK(fr.step2Done && fr.current == 2);
 	SetMode(s, "explore", Mode::Genre);
+	MJ_CHECK(ComputeFirstRun(s, conn).current == 2);  // a mode without any selector is not a selection yet
+	s.environments["explore"].selector = "Folk";
 	fr = ComputeFirstRun(s, conn);
 	MJ_CHECK(fr.step3Done && fr.current == 3);
 	SetMode(s, "explore", Mode::Vanilla);
 	MJ_CHECK(ComputeFirstRun(s, conn).current == 2);
+}
+
+MJ_TEST(FirstRun_ArtistNeedsLinkAndEmptyPoolsHoldStepThree)
+{
+	auto s = mj::config::DefaultSettings();
+	s.global.serverUrl = "http://h:1"; s.global.personalKey = "k";
+	MJ::App::Connection conn; conn.state = MJ::App::ConnState::Ok;
+	SetMode(s, "explore", Mode::Artist);
+	SetSelectorText(s, "explore", "Sigur");  // typed only: not linked
+	MJ_CHECK(ComputeFirstRun(s, conn).current == 2);
+	ApplyHit(s, "explore", Hit("artist", "local", "9", "Sigur Ros"));
+	MJ_CHECK(ComputeFirstRun(s, conn).current == 3);
+	std::vector<MJ::App::EnvStatus> st(1);
+	st[0].id = "explore"; st[0].active = true; st[0].ready = 0; st[0].target = 3;
+	MJ_CHECK(ComputeFirstRun(s, conn, &st).current == 2);  // active but nothing ready: not done
+	st[0].ready = 1;
+	MJ_CHECK(ComputeFirstRun(s, conn, &st).current == 3);
+}
+
+MJ_TEST(Edit_FlagOnInheritingSubKeepsTheParentsMusic)
+{
+	auto s = mj::config::DefaultSettings();
+	SetMode(s, "explore", Mode::Genre);
+	SetSelectorText(s, "explore", "Folk");
+	SetStreaming(s, "explore.snow", true);       // ticking a flag creates the sub entry...
+	const auto* sub = s.Find("explore.snow");
+	MJ_CHECK(sub != nullptr);
+	MJ_CHECK(sub->mode == Mode::Genre && sub->selector == "Folk");  // ...which must still resolve to Folk
+	MJ_CHECK(sub->allowStreaming);
+	SetRememberPlace(s, "explore.tundra", true);
+	MJ_CHECK(s.Find("explore.tundra")->mode == Mode::Genre && s.Find("explore.tundra")->selector == "Folk");
+}
+
+MJ_TEST(Edit_PoolSizeOnFreshSetupPersistsAndIsInherited)
+{
+	auto s = mj::config::DefaultSettings();
+	SetPoolSizeAll(s, 5);
+	MJ_CHECK(CurrentPoolSize(s) == 5);
+	SetMode(s, "combat", Mode::Genre);
+	MJ_CHECK(s.Find("combat")->poolSize == 5);
+	SetSelectorText(s, "combat", "Folk");
+	mj::config::Diagnostics diag;
+	const auto ini = mj::config::SerializeIni(s);
+	const auto back = mj::config::ParseIni(ini, diag);
+	MJ_CHECK(back.Find("combat") && back.Find("combat")->poolSize == 5);
+	// The stub entry is Vanilla: nothing changes for the profile.
+	MJ_CHECK(s.Find("explore")->mode == Mode::Vanilla);
+}
+
+MJ_TEST(Presets_MissingGenresAgainstServerList)
+{
+	const auto* p = FindPreset("calm_epic");
+	MJ_CHECK(p != nullptr);
+	MJ_CHECK(MissingPresetGenres(*p, {}).empty());  // no list known: nothing reported
+	std::vector<MJ::App::SearchHit> genres = { Hit("genre", "local", "soundtrack", "Soundtrack"), Hit("genre", "local", "Folk", "Folk") };
+	const auto missing = MissingPresetGenres(*p, genres);
+	MJ_CHECK(missing.size() == 1 && missing[0] == "Orchestral");  // case-insensitive match; listed once
+	genres.push_back(Hit("genre", "local", "Orchestral", "Orchestral"));
+	MJ_CHECK(MissingPresetGenres(*p, genres).empty());
+}
+
+MJ_TEST(Hits_SuggestionsAreCapped)
+{
+	std::vector<MJ::App::SearchHit> many;
+	for (int i = 0; i < 500; ++i) many.push_back(Hit("artist", "local", std::to_string(i).c_str(), "A"));
+	MJ_CHECK(FilterHits(many, Mode::Artist, false).size() == kMaxSuggestions);
+	MJ_CHECK(FilterHits(many, Mode::Artist, false, 5).size() == 5);
 }
 
 MJ_TEST(Status_Formatting)
@@ -515,7 +584,7 @@ MJ_TEST(StoreFlow_EditSaveApply)
 	mj::config::SettingsStore reloaded(ini, dir.Path() / "cache");
 	MJ_CHECK(reloaded.Load());
 	const auto snap = reloaded.Snapshot();
-	MJ_CHECK(snap->Find("explore") && snap->Find("explore")->selector == "Ambient");
+	MJ_CHECK(snap->Find("explore") && snap->Find("explore")->selector == "Soundtrack");
 	MJ_CHECK(snap->global.serverUrl == "http://127.0.0.1:8080");
 	MJ_CHECK(snap->global.personalKey == secret);
 	MJ_CHECK(q.LastError().find(secret) == std::string::npos);

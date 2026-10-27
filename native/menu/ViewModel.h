@@ -173,7 +173,9 @@ namespace MJ::Menu
 
 	// Search hits usable for a mode: right kind, never qobuz, streaming services only when streaming is allowed.
 	[[nodiscard]] bool HitUsable(const App::SearchHit& a_hit, Mode a_mode, bool a_allowStreaming);
-	[[nodiscard]] std::vector<App::SearchHit> FilterHits(const std::vector<App::SearchHit>& a_hits, Mode a_mode, bool a_allowStreaming);
+	inline constexpr std::size_t kMaxSuggestions = 200;
+	[[nodiscard]] std::vector<App::SearchHit> FilterHits(const std::vector<App::SearchHit>& a_hits, Mode a_mode, bool a_allowStreaming,
+		std::size_t a_max = kMaxSuggestions);
 	// Stores the pick: genre -> selector (id, else title); artist/playlist -> service + id + title as the label.
 	// False (no change) when the hit is unusable for the current mode.
 	bool ApplyHit(Settings& a_settings, const std::string& a_envId, const App::SearchHit& a_hit);
@@ -199,6 +201,9 @@ namespace MJ::Menu
 	// Applies every entry (and drops sub-environment overrides of the groups it names, which would otherwise win).
 	// "vanilla" preset: every entry in the settings goes back to Vanilla. False when the id is unknown.
 	bool ApplyPreset(Settings& a_settings, std::string_view a_presetId);
+	// Genre selectors of the preset that are NOT in `a_genres` (a genre-browse result from the server). Empty list given
+	// = nothing known = nothing reported.
+	[[nodiscard]] std::vector<std::string> MissingPresetGenres(const Preset& a_preset, const std::vector<App::SearchHit>& a_genres);
 
 	// ---- first run --------------------------------------------------------------------------------------
 	struct FirstRun
@@ -208,7 +213,10 @@ namespace MJ::Menu
 		bool step3Done = false;  // at least one environment is not Vanilla
 		int  current   = 0;      // 0..2 = first unfinished step, 3 = all done
 	};
-	[[nodiscard]] FirstRun ComputeFirstRun(const Settings& a_settings, const App::Connection& a_conn);
+	// Step 3 = a real selection exists (not Vanilla, selector filled, artist/playlist linked) and, when `a_status` is given,
+	// the core does not report every active environment as empty.
+	[[nodiscard]] FirstRun ComputeFirstRun(const Settings& a_settings, const App::Connection& a_conn,
+		const std::vector<App::EnvStatus>* a_status = nullptr);
 
 	// ---- status text ------------------------------------------------------------------------------------
 	[[nodiscard]] const App::EnvStatus* FindStatus(const std::vector<App::EnvStatus>& a_all, std::string_view a_envId);

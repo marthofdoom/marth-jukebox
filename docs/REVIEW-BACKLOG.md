@@ -52,3 +52,11 @@ Note: the `core-settings` branch also edits this file; merge both sections.
 - **SEV-5** A 4 MiB JSON body can build a ~60 MB nlohmann DOM.
 - **SEV-5** An `http://` base sends the key in clear text (documented: README / NEXUS-COMPLIANCE recommend
   `https://` off-LAN).
+
+## menu-page (settings page), Opus review of 3a17c22 + da76f61
+
+- **SEV-5** A literal `##` in a server-supplied title truncates the label of a suggestion row (ImGui id syntax).
+- **SEV-5** `SettingsStore::Update` may log (sanitize corrections) on the render thread.
+- **SEV-5** `s.queryText.erase` inside the suggestions loop is fragile (it relies on the loop ending right after the pick).
+- **SEV-5** The empty-text browse `SearchAsync` ("Show suggestions" with no text, genre list for presets) is a contract with
+  the core: it must return the library's genres/artists for an empty query.
