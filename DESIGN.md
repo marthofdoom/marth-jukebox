@@ -147,3 +147,38 @@ that expands the chosen pool file into the engine slot on the worker thread (ten
 rename. The engine still sees a plain WAV. Lossless only: the sources are already lossy, so a lossy
 re-encode would degrade them twice. Milestone M3 (after the retarget works); needs a Harmony-repo change,
 which is separate scope.
+
+**8.4 Ducking and diegetic music (marth: bards in taverns; our music must be off).** The M0a log shows how
+vanilla already does it, with the engine's own priority and ducking, so we mostly have to stay out of the way:
+| Type | Tracks | Priority | `ducksOtherMusicBy` | Role |
+|---|---|---|---|---|
+| `MUSTavern` / `MUSTavernB` | 6 / 9 Single | 55 | 0 | the **bard songs themselves** (diegetic) |
+| `MUSTavernSILENCE` | 3 **Silent** | 54 | 6000 (60%), fade 12 s | silences exploration music while inside |
+| `MUSExploreTundra` | 71 Single, 20 Palette, **16 Silent** | 49 | 0 | exploration |
+| `MUSCombat` | 30 Single | 2 | 10000 | combat |
+Rules that follow:
+- **Never retarget Silent tracks or all-Silent types** (`MUSTavernSILENCE`): they are the mechanism.
+- **Diegetic types default to Vanilla and are not offered a streaming source by default:** tavern/bard
+  (`MUSTavern*`), Sovngarde chants, Hall of Valor, intro cart, character creation, word-of-power stingers.
+  The menu shows them in a "Performed in the world (kept vanilla)" group; the player may opt in, with a
+  warning that the bard's animation will no longer match the music.
+- **Everything else on the engine's priority/ducking:** our tracks are ordinary music tracks inside the
+  vanilla types, so the bard (priority 55) displaces explore (49) exactly as before and dialogue/combat
+  ducking behave unchanged. We add no ducking logic of our own in v1.
+- **Unknown music types (other mods, e.g. bard and ambience mods) stay Vanilla** unless the player maps
+  them. This supersedes the "unknown types fall into `default`" line in section 4: LoreRim has 215 types.
+- Safety rule for later: while the current type is flagged diegetic or any type with priority above ours is
+  playing, the plugin never starts a retarget change and does not consume the pool.
+
+**8.5 Pool size is a setting.** 3 by default (WAV on disk); with FLAC (8.3) the same disk holds more, so the
+menu offers 3 / 5 / 8 per environment and shows the disk cost next to the choice.
+
+**8.6 Retarget by in-place replacement, not by shrinking the array (from the M0a data).** Vanilla explore
+mixes 16 Silent tracks among its songs: that is the cadence (long quiet gaps). Replacing the whole array with
+`[A, B]` would remove the silences and make the music continuous, and would also invalidate the stored
+`currentTrackIndex` (48 of 125 resumed after combat). Instead overwrite, in place, only the Single/Palette
+entries with our wrappers and leave Silent entries and the array size untouched. This keeps the cadence,
+needs no resize, and keeps every stored index valid. The open problem it creates: the engine may pick the
+same wrapper twice in a row; M0b must show whether a slot can be refilled once its track has finished
+(status `Finishing`/`Inactive`) before the engine asks for it again, and how crossfade (`fadeTime` 12 s on
+explore) overlaps two slots.
