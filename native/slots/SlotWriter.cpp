@@ -283,10 +283,38 @@ namespace MJ::Slots {
             return true;
         }
 
-        // .orig is created once from the slot file and never overwritten. Refuses to back up
-        // a file that has exactly the test-tone size (a slot left as a tone by an earlier run).
+        // Kill switch, checked on the file itself (not only the 2 s poll). Latches g_kill.
+        bool KillNow(const std::string& a_tag, const char* a_where) {
+            if (!g_kill.load() && FileExists(KillSwitchPath())) {
+                g_kill = true;
+                spdlog::warn("[slots] kill switch file present: {}", Utf8(KillSwitchPath()));
+            }
+            if (g_kill.load()) {
+                spdlog::info("[slots] {}: rename experiment stopped {} (kill switch)", a_tag, a_where);
+                return true;
+            }
+            return false;
+        }
+
+        // .orig is created once from the slot file and never overwritten: copied to .orig.part,
+        // verified, then renamed to .orig WITHOUT replace. Refuses to back up a file that has
+        // exactly the test-tone size (a slot left as a tone by an earlier run), and refuses an
+        // existing .orig that is empty or tone-sized. Any refusal leaves the slot untouched.
         bool EnsureBackup(const std::filesystem::path& a_dst, const std::filesystem::path& a_orig, const std::string& a_tag) {
-            if (FileExists(a_orig)) return true;
+            if (FileExists(a_orig)) {
+                std::uint64_t osz = 0;
+                if (!FileSize(a_orig, osz)) {
+                    spdlog::error("[slots] {}: cannot stat {} (Win32 error {}); slot NOT touched", a_tag, Utf8(a_orig), ::GetLastError());
+                    return false;
+                }
+                if (osz == 0 || osz == kFileBytes) {
+                    spdlog::error("[slots] {}: BAD BACKUP {} is {} bytes ({}); slot NOT touched (restore the original by hand, see "
+                                  "docs/M0C-TEST.md)",
+                                  a_tag, Utf8(a_orig), osz, osz == 0 ? "empty" : "a test tone");
+                    return false;
+                }
+                return true;
+            }
             std::uint64_t sz = 0;
             if (!FileSize(a_dst, sz)) {
                 spdlog::error("[slots] {}: no {} and cannot stat {} (Win32 error {}); slot NOT touched", a_tag, Utf8(a_orig), Utf8(a_dst),
@@ -299,13 +327,25 @@ namespace MJ::Slots {
                               a_tag, Utf8(a_orig), Utf8(a_dst), sz);
                 return false;
             }
-            const auto t0 = std::chrono::steady_clock::now();
-            if (!::CopyFileW(a_dst.c_str(), a_orig.c_str(), TRUE)) {
-                spdlog::error("[slots] {}: backup {} -> {} FAILED, Win32 error {}; slot NOT touched", a_tag, Utf8(a_dst), Utf8(a_orig),
+            const auto t0   = std::chrono::steady_clock::now();
+            auto       part = a_orig;
+            part += L".part";
+            if (!::CopyFileW(a_dst.c_str(), part.c_str(), FALSE)) {
+                spdlog::error("[slots] {}: backup copy {} -> {} FAILED, Win32 error {}; slot NOT touched", a_tag, Utf8(a_dst), Utf8(part),
                               ::GetLastError());
                 return false;
             }
-            spdlog::info("[slots] {}: backed up the original ({} bytes) to {} ({}ms)", a_tag, sz, Utf8(a_orig), MsSince(t0));
+            std::uint64_t psz = 0;
+            if (!FileSize(part, psz) || psz != sz) {
+                spdlog::error("[slots] {}: backup {} verify FAILED ({} bytes, expected {}); slot NOT touched", a_tag, Utf8(part), psz, sz);
+                return false;
+            }
+            if (!::MoveFileExW(part.c_str(), a_orig.c_str(), 0)) {
+                spdlog::error("[slots] {}: backup rename {} -> {} FAILED, Win32 error {}; slot NOT touched", a_tag, Utf8(part), Utf8(a_orig),
+                              ::GetLastError());
+                return false;
+            }
+            spdlog::info("[slots] {}: backed up the original ({} bytes) to {} via .part ({}ms)", a_tag, sz, Utf8(a_orig), MsSince(t0));
             return true;
         }
 
@@ -364,15 +404,12 @@ namespace MJ::Slots {
             LockProbe(0, tag);
 
             // (f)
-            if (g_kill.load()) {
-                spdlog::info("[slots] {}: rename experiment skipped, kill switch", tag);
-                return;
-            }
             const auto dst = HarmonyDir() / kSlotFile[0];
             auto       tmp = dst;
             tmp += L".tmp";
             auto orig = dst;
             orig += L".orig";
+            if (KillNow(tag, "after the 1.5 s wait, before the backup")) return;
             if (!EnsureBackup(dst, orig, tag)) return;
 
             const bool   tone = (a_j.n % 2) == 1;
@@ -392,6 +429,7 @@ namespace MJ::Slots {
                 }
                 spdlog::info("[slots] {}: copied the original to {} ({} bytes, {}ms)", tag, Utf8(tmp), tsz, MsSince(t0));
             }
+            if (KillNow(tag, "before the rename")) return;
             const auto tr = std::chrono::steady_clock::now();
             if (!::MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING)) {
                 const DWORD err = ::GetLastError();

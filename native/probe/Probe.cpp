@@ -342,8 +342,8 @@ namespace MJ::Probe {
                 }
             }
             // Gap between two consecutive watcher tasks (nominally 250 ms). Logged only when
-            // > 1000 ms: the main thread did not run SKSE tasks for that long.
-            if (g_prevTickMs >= 0 && tickMs - g_prevTickMs > 1000) {
+            // > 400 ms: the main thread did not run SKSE tasks for that long.
+            if (g_prevTickMs >= 0 && tickMs - g_prevTickMs > 400) {
                 spdlog::info("[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}",
                              tickMs - g_prevTickMs, g_prevTickMs, tickMs, TypeName(s.current), s.index, StatusName(s.typeStatus));
             }

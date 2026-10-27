@@ -23,10 +23,12 @@ The silent gaps between songs are unchanged.
 2. **First restore your test music in slot A** (M0b left a 440 Hz tone in it):
    - move `overwrite/Music/Harmony/explore_a.wav.orig` over `mods/<mod>/Music/Harmony/explore_a.wav`
      (replace it, drop the `.orig` suffix);
-   - delete any `*.tmp` and any other `*.orig` left in `overwrite/Music/Harmony/`.
+   - delete any `*.tmp`, `*.part` and any other `*.orig` left in `overwrite/Music/Harmony/`.
 
-   If a `.orig` is missing when M0c needs one, it creates it from the current `explore_a.wav`. It refuses
-   if that file has exactly the tone's size (2,646,044 bytes) and then changes nothing. So restore first.
+   If a `.orig` is missing when M0c needs one, it creates it from the current `explore_a.wav`: it copies to
+   `explore_a.wav.orig.part`, checks the size, then renames to `.orig`, never replacing an existing one. It
+   refuses, and changes nothing, if `explore_a.wav` has exactly the tone's size (2,646,044 bytes), or if an
+   existing `.orig` is empty or tone-sized (`BAD BACKUP` in the log). So restore first.
 3. Replace `MarthJukebox.dll` and `MarthJukebox.pdb` in the mod's `SKSE/Plugins/` with the ones from the
    CI artifact `MarthJukebox-dll` of branch `m0c-slot-protocol`. Leave the ESP alone.
 4. Make sure `SKSE/Plugins/MarthJukebox.noretarget` does **not** exist.
@@ -57,10 +59,13 @@ Your music is in `explore_a.wav` after an even number of swaps. If the last swap
 
 Create an empty `SKSE/Plugins/MarthJukebox.noretarget` to stop it:
 
-- It is checked at load, and every 2 s while the game runs.
-- File swaps stop at once.
-- The original songs are put back at the next 250 ms tick where `MUSExploreTundra` is neither the current
-  music type nor queued (status Inactive or Finished).
+- It is checked at load and every 2 s while the game runs. The file experiment also checks the file
+  itself after its 1.5 s wait (before the backup) and again right before the rename. So no new file swap
+  starts once the file exists; a swap already past its last check finishes.
+- The original **track entries** of `MUSExploreTundra` are put back at the next 250 ms tick where the type
+  is neither the current music type nor queued (status Inactive or Finished).
+- It does **not** restore `explore_a.wav`: the file may be left holding a tone. To get your music back,
+  do the restore from step 2 of Install.
 - It stays off until the next game start.
 
 ## What to send back
@@ -121,6 +126,10 @@ Compare `h0` (and its wrapper) from play #n with the `idx` of play #n+1 and with
 `[probe] now-playing` lines in between. Whether this log is taken right after the engine rotated the history,
 or before, is part of what the data must show.
 
+**Platform note.** Whatever (e) and (f) show here holds for **Proton (Wine) + MO2/USVFS** only: file
+sharing and rename-over-open-file semantics are emulated by Wine and rerouted by USVFS. Record the result
+per platform (Proton/USVFS here). Do not assume Windows behaves the same until it is tested there.
+
 **Crash / stutter:** compare your noted times with the `play #n` and `rename` lines; each step logs its
 elapsed ms. Two lines help:
 
@@ -128,7 +137,7 @@ elapsed ms. Two lines help:
   for that play event (detecting it, logging, and queueing the file work). The file work itself runs on
   the plugin's own thread.
 - `[stall] main-thread tick gap <N> ms (previous tick at +<t>ms, this at +<t>ms) current=... idx=...
-  status=...`: written only when the plugin's 250 ms check was held up for more than 1 s. That means the
+  status=...`: written only when the plugin's 250 ms check was held up for more than 400 ms. That means the
   game's main thread was blocked for that long; nothing is logged when it was not. Loading screens also
   produce these lines, which is normal.
 
@@ -136,5 +145,10 @@ elapsed ms. Two lines help:
 
 - A `[stall]` line at the same time means the main thread was blocked. The lines around it show what else
   was happening.
-- No `[stall]` line means the main thread was not blocked, so it was not our thread. The other mods' logs
-  for that moment are the place to look.
+- No `[stall]` line means there was no main-thread block over the threshold (400 ms; the normal gap is
+  250 ms). Audio can still hitch without blocking the main thread.
+- Compare the stutter time with the worker's lines as well: the backup and the original copy (about 23 MB
+  each), the tone write and the rename. Under USVFS these could disturb audio streaming while the main
+  thread runs normally.
+- If neither our `[stall]` nor our worker lines match the stutter, look at the other mods' logs for that
+  moment.

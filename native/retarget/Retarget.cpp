@@ -238,6 +238,9 @@ namespace MJ::Retarget {
                 return;
             }
             Slots::PublishPlay(true, handle, idx);
+            // No sound handle yet (invalid id or 0): not a play; n does not advance and the
+            // last-seen values stay, so the real handle a tick later is the event.
+            if (handle == RE::BSSoundHandle::kInvalidID || handle == 0) return;
             if (g_haveLastPlay && handle == g_lastHandle && idx == g_lastIdx) return;
             const auto t0  = std::chrono::steady_clock::now();
             g_haveLastPlay = true;
