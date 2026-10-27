@@ -145,3 +145,16 @@ essentially never hear a repeat. Two layers:
   server pick that is already in it, asking `next` again; the pool of N is filled only with tracks not
   recently played. The menu shows how many distinct tracks a selection can produce (pool size from
   `next`'s `pool_size`) and warns when it is small ("only 25 tracks: expect repeats").
+
+**8.8 Qobuz is excluded; previews must never reach the game (marth 2026-10-27: no active Qobuz subscription).**
+Measured on the live server: a Qobuz track with `duration_s` 224 produced a WAV of exactly 30.0 s (Qobuz
+serves 30 s previews without a subscription). Consequences:
+- The plugin's streaming checkbox means YouTube Music only. Harmony's `sources=all` still includes Qobuz when
+  it is signed in, so v1.0 needs a Harmony change (follow-up branch after `game-pools`): `sources` also
+  accepts a service list or an exclusion (for example `["library","ytmusic"]`), and `status` lists the usable
+  sources.
+- Independent of that, the plugin ALWAYS validates a downloaded track before it enters the pool: decoded
+  duration (from the WAV `data` size, or FLAC STREAMINFO) must be at least 90% of the `duration_s` that `next`
+  reported for tracks longer than 60 s; anything shorter is discarded, logged ("preview or truncated stream") and
+  the pick is replaced. This also catches a cut-off network transfer and any other truncated source.
+- Compression test results: docs/COMPRESSION-BENCH.md (FLAC L1 chosen; lz4 not useful on PCM).
