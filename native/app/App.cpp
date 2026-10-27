@@ -82,10 +82,11 @@ namespace MJ::App {
             }
         }
 
-        bool ServiceAllowed(const std::string& a_svc, bool a_streaming, bool a_allowQobuz) {
+        // Search hits the menu may store as an Artist/Playlist selector. Never Qobuz (review B3): Settings refuses
+        // Service=qobuz, so Qobuz only ever enters through `sources` (AllowQobuz=1) for genre/query selectors.
+        bool ServiceAllowed(const std::string& a_svc, bool a_streaming, bool) {
             if (a_svc == "local") return true;
             if (a_svc == "ytmusic") return a_streaming;
-            if (a_svc == "qobuz") return a_streaming && a_allowQobuz;
             return false;
         }
 
@@ -126,7 +127,9 @@ namespace MJ::App {
                     if (c.youtubeUsable) add("YouTube Music");
                     if (st.qobuzUsable && snap->global.allowQobuz) add("Qobuz");
                     if (!st.servicesReported)
-                        c.message = "Connected. This Harmony is older than 1.0.13: library only, update it for streaming.";
+                        c.message = snap->global.allowQobuz
+                                        ? "Connected. This Harmony is older than 1.0.13: streaming environments use all its sources (Qobuz included, AllowQobuz=1)."
+                                        : "Connected. This Harmony is older than 1.0.13: library only, update it for streaming.";
                     else if (srcs.empty())
                         c.message = "Connected, but no music source is usable on the server.";
                     else
@@ -347,6 +350,14 @@ namespace MJ::App {
     }
 
     void OnGameLoaded(const char* a_why) { Retarget::LogState(a_why); }
+
+    void TickGameThread() {
+        // Toasts (pool/ToastPolicy.h) are shown here only: this runs inside the watcher's SKSE task on the game thread.
+        // Not over the main menu or a loading screen: the message waits in the queue until they close.
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui || ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)) return;
+        if (const auto t = Pool::PopToast()) RE::DebugNotification(t->c_str());
+    }
 
     // ================================================================ AppApi.h
 

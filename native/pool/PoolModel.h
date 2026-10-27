@@ -89,10 +89,18 @@ namespace mj::pool
 	[[nodiscard]] bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key);
 	void               AddRecent(PoolIndex& index, std::string_view envId, std::string_view key);
 
-	// Indexes into `picks` (service, id pairs, in server order) that may enter `envId`'s pool: not recently
-	// played, not already in the pool, not a duplicate within `picks`; at most `want` of them.
-	[[nodiscard]] std::vector<std::size_t> AcceptablePicks(const PoolIndex& index, std::string_view envId,
-		const std::vector<std::pair<std::string, std::string>>& picks, std::size_t want);
+	// Which of `picks` (service, id pairs, in server order) may enter `envId`'s pool, at most `want`.
+	// Never: an empty key, a key already in the pool, a duplicate within `picks`, a key in `exclude` (the
+	// worker's short-lived set of downloads that just failed). Preferred: picks NOT in the recent-played list.
+	// If every eligible pick was played recently (a small selection played through), the least recently played
+	// ones are taken instead and `repeats` is set: a small selection repeats rather than starving the pool.
+	struct PickChoice
+	{
+		std::vector<std::size_t> picks;
+		bool                     repeats = false;
+	};
+	[[nodiscard]] PickChoice AcceptablePicks(const PoolIndex& index, std::string_view envId,
+		const std::vector<std::pair<std::string, std::string>>& picks, std::size_t want, const std::set<std::string>& exclude = {});
 
 	// Removes the entry with this key from the environment's pool. True if it was there.
 	bool RemoveEntry(PoolIndex& index, std::string_view envId, std::string_view key);

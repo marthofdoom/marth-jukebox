@@ -22,6 +22,7 @@ namespace mj::pool
 	{
 		constexpr std::uint64_t kMaxDataBytes = 0xFFFFFFFFull - 36;  // RIFF size field is 32-bit
 		constexpr std::size_t   kHeadBytes    = 64 * 1024;           // enough for any header Harmony writes
+		constexpr double        kMaxSeconds   = 2.0 * 3600.0;        // Harmony cuts sources at 2 h (game-source.md)
 
 		std::uint16_t Le16(const std::uint8_t* p) { return static_cast<std::uint16_t>(p[0] | (p[1] << 8)); }
 		std::uint32_t Le32(const std::uint8_t* p)
@@ -82,10 +83,21 @@ namespace mj::pool
 			return n == 0 || std::fwrite(p, 1, n, f) == n;
 		}
 
+		// A failure of the SOURCE file (unreadable, not decodable, wrong format): the caller drops that track.
 		ConvertResult Fail(ConvertResult r, std::string why)
 		{
-			r.ok    = false;
-			r.error = std::move(why);
+			r.ok          = false;
+			r.sourceError = true;
+			r.error       = std::move(why);
+			return r;
+		}
+
+		// A failure on the OUTPUT side (create/write/flush, disk full) or a cancel: the source is fine.
+		ConvertResult FailDst(ConvertResult r, std::string why)
+		{
+			r.ok          = false;
+			r.sourceError = false;
+			r.error       = std::move(why);
 			return r;
 		}
 
@@ -121,35 +133,38 @@ namespace mj::pool
 			if (L.dataBytes > kMaxDataBytes) {
 				return Fail(r, "WAV data is larger than a RIFF file can hold");
 			}
+			if (r.durationS > kMaxSeconds) {
+				return Fail(r, "audio is longer than 2 hours");
+			}
 			if (dst.empty()) {
 				r.ok = true;
 				return r;
 			}
 			File out = Open(dst, true);
 			if (!out) {
-				return Fail(r, "cannot create the output file");
+				return FailDst(r, "cannot create the output file");
 			}
 			const auto hdr = CanonicalWavHeader(L.fmt, static_cast<std::uint32_t>(L.dataBytes));
 			if (!WriteAll(out.get(), hdr.data(), hdr.size()) || !Seek(in, L.dataOffset)) {
-				return Fail(r, "cannot write the WAV header");
+				return FailDst(r, "cannot write the WAV header");
 			}
 			std::vector<std::uint8_t> buf(1u << 20);
 			std::uint64_t             left = L.dataBytes;
 			while (left > 0) {
 				if (st.stop_requested()) {
-					return Fail(r, "cancelled");
+					return FailDst(r, "cancelled");
 				}
 				const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(left, buf.size()));
 				if (std::fread(buf.data(), 1, n, in) != n) {
 					return Fail(r, "WAV source ended early");
 				}
 				if (!WriteAll(out.get(), buf.data(), n)) {
-					return Fail(r, "write failed (disk full?)");
+					return FailDst(r, "write failed (disk full?)");
 				}
 				left -= n;
 			}
 			if (!FlushAndClose(out)) {
-				return Fail(r, "flush/close of the output failed");
+				return FailDst(r, "flush/close of the output failed");
 			}
 			r.bytesWritten = 44 + L.dataBytes;
 			r.ok           = true;
@@ -179,6 +194,9 @@ namespace mj::pool
 			if (total == 0) {
 				return Fail(r, "FLAC STREAMINFO has no total sample count (duration unknown)");
 			}
+			if (static_cast<double>(total) / r.fmt.rate > kMaxSeconds) {
+				return Fail(r, "audio is longer than 2 hours");
+			}
 			const std::uint64_t dataBytes = total * r.fmt.channels * 2;
 			if (dataBytes > kMaxDataBytes) {
 				return Fail(r, "decoded FLAC is larger than a RIFF file can hold");
@@ -187,11 +205,11 @@ namespace mj::pool
 			if (!dst.empty()) {
 				out = Open(dst, true);
 				if (!out) {
-					return Fail(r, "cannot create the output file");
+					return FailDst(r, "cannot create the output file");
 				}
 				const auto hdr = CanonicalWavHeader(r.fmt, static_cast<std::uint32_t>(dataBytes));
 				if (!WriteAll(out.get(), hdr.data(), hdr.size())) {
-					return Fail(r, "write failed (disk full?)");
+					return FailDst(r, "write failed (disk full?)");
 				}
 			}
 			constexpr std::uint64_t   kChunk = 16384;
@@ -199,7 +217,7 @@ namespace mj::pool
 			std::uint64_t             got = 0;
 			while (got < total) {
 				if (st.stop_requested()) {
-					return Fail(r, "cancelled");
+					return FailDst(r, "cancelled");
 				}
 				const std::uint64_t want = std::min<std::uint64_t>(kChunk, total - got);
 				const std::uint64_t n    = drflac_read_pcm_frames_s16(fl.get(), want, pcm.data());
@@ -207,7 +225,7 @@ namespace mj::pool
 					break;  // corrupt frame or truncated stream: caught by the count check below
 				}
 				if (out && !WriteAll(out.get(), pcm.data(), static_cast<std::size_t>(n * r.fmt.channels * 2))) {
-					return Fail(r, "write failed (disk full?)");
+					return FailDst(r, "write failed (disk full?)");
 				}
 				got += n;
 			}
@@ -219,7 +237,7 @@ namespace mj::pool
 			}
 			if (out) {
 				if (!FlushAndClose(out)) {
-					return Fail(r, "flush/close of the output failed");
+					return FailDst(r, "flush/close of the output failed");
 				}
 				r.bytesWritten = 44 + dataBytes;
 			}
@@ -315,12 +333,12 @@ namespace mj::pool
 			why = std::to_string(f.bits) + "-bit audio (the slot needs 16-bit PCM)";
 			return false;
 		}
-		if (f.channels < 1 || f.channels > 2) {
-			why = std::to_string(f.channels) + " channels (the slot needs mono or stereo)";
+		if (f.channels != 2) {
+			why = std::to_string(f.channels) + " channel(s) (the slot needs stereo)";
 			return false;
 		}
-		if (f.rate != 44100 && f.rate != 48000) {
-			why = std::to_string(f.rate) + " Hz (the slot needs 44100 or 48000 Hz)";
+		if (f.rate != 44100) {
+			why = std::to_string(f.rate) + " Hz (the slot needs 44100 Hz)";
 			return false;
 		}
 		return true;

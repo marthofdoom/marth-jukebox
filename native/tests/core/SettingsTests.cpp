@@ -135,6 +135,30 @@ MJ_TEST(Settings_ChooseSourcesAndAllowQobuz)
 	MJ_CHECK(!r.global.allowQobuz && diag.empty());
 }
 
+MJ_TEST(Settings_ToastKeys)
+{
+	const Settings d = DefaultSettings();
+	MJ_CHECK(d.global.toastEnabled && d.global.toastIntervalMinutes == 5);
+	const std::string text = SerializeIni(d);
+	MJ_CHECK(text.find("ToastEnabled=1") != std::string::npos && text.find("ToastIntervalMinutes=5") != std::string::npos);
+	Diagnostics diag;
+	Settings    r = ParseIni("[General]\ntoastenabled=off\nToastIntervalMinutes=12\n", diag);
+	MJ_CHECK(!r.global.toastEnabled && r.global.toastIntervalMinutes == 12 && diag.empty());
+	diag.clear();
+	r = ParseIni(SerializeIni(r), diag);
+	MJ_CHECK(!r.global.toastEnabled && r.global.toastIntervalMinutes == 12 && diag.empty());
+	// Out of range is clamped with one diagnostic; garbage keeps the default with one diagnostic.
+	diag.clear();
+	r = ParseIni("[General]\nToastIntervalMinutes=0\n", diag);
+	MJ_CHECK(r.global.toastIntervalMinutes == 1 && diag.size() == 1);
+	diag.clear();
+	r = ParseIni("[General]\nToastIntervalMinutes=999\n", diag);
+	MJ_CHECK(r.global.toastIntervalMinutes == 60 && diag.size() == 1);
+	diag.clear();
+	r = ParseIni("[General]\nToastIntervalMinutes=soon\nToastEnabled=maybe\n", diag);
+	MJ_CHECK(r.global.toastIntervalMinutes == 5 && r.global.toastEnabled && diag.size() == 2);
+}
+
 MJ_TEST(Settings_IniRoundTrip)
 {
 	Settings s = DefaultSettings();
@@ -339,7 +363,7 @@ MJ_TEST(Store_SaveLoadRoundTripAndNoTmpLeft)
 	const auto ini = dir.Path() / "deep" / "er" / "MarthJukebox.ini";
 	SettingsStore st(ini, dir.Path() / "cache");
 	st.Update([](Settings& s) {
-		s.global.serverUrl = "http://harmony:8080";
+		s.global.serverUrl = "http://music.example.lan:8080";
 		s.environments["combat"].mode = Mode::Genre;
 		s.environments["combat"].selector = "metal";
 	});
@@ -350,7 +374,7 @@ MJ_TEST(Store_SaveLoadRoundTripAndNoTmpLeft)
 
 	SettingsStore st2(ini, dir.Path() / "cache");
 	MJ_CHECK(st2.Load());
-	MJ_CHECK(st2.Snapshot()->global.serverUrl == "http://harmony:8080");
+	MJ_CHECK(st2.Snapshot()->global.serverUrl == "http://music.example.lan:8080");
 	MJ_CHECK(st2.Snapshot()->Find("combat") && st2.Snapshot()->Find("combat")->selector == "metal");
 
 	// Custom cache dir wins over the injected default.
@@ -591,7 +615,7 @@ MJ_TEST(Settings_PersonalKeyNeverInMessages)
 
 namespace
 {
-	const char* kGoodIni = "[General]\nServerUrl=http://harmony:8080\nPersonalKey=SEKRET-VALUE\nCacheCapMB=2048\n";
+	const char* kGoodIni = "[General]\nServerUrl=http://music.example.lan:8080\nPersonalKey=SEKRET-VALUE\nCacheCapMB=2048\n";
 
 	std::string Utf16Le(const std::string& ascii)
 	{

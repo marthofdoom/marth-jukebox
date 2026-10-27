@@ -399,6 +399,26 @@ namespace {
         CHECK(seen.size() == 3 && seen[0].target == "/api/library/view?view=genres&limit=5000" && seen[2].target == "/api/playlists");
     }
 
+    // Review B2: Harmony 1.0.12 accepts only profile/type/sources/count/peek in `next` and answers 400 to anything
+    // else. The plugin passes an EMPTY container for WAV, which must leave the key out of the body entirely.
+    void T_NextOldServerRejectsUnknownKeys() {
+        Server s([](const Req& q, Conn& c, int) {
+            const json b = json::parse(q.body, nullptr, false);
+            bool       ok = b.is_object();
+            if (ok) {
+                for (const auto& [k, v] : b.items()) {
+                    if (k != "profile" && k != "type" && k != "sources" && k != "count" && k != "peek") ok = false;
+                }
+            }
+            if (ok) c.Send(Resp(200, "OK", R"({"profile":"p","type":"explore","sources":"library","pool_size":3,"tracks":[]})"));
+            else c.Send(Resp(400, "Bad Request", R"({"error":"unknown field","code":"bad_request"})"));
+        });
+        HarmonyClient cl;
+        Configured(cl, MakeConfig(s.Url()));
+        CHECK_ERR(cl.Next("p", "explore", "library", 3, false, ""), Error::kOk);
+        CHECK_ERR(cl.Next("p", "explore", "library", 3, false, "flac"), Error::kBadRequest);  // what an old server does
+    }
+
     void T_Next() {
         Server s([](const Req&, Conn& c, int) {
             c.Send(Resp(200, "OK", R"({"profile":"skyrim","type":"default","requested_type":"explore","sources":"library",
@@ -1310,6 +1330,7 @@ int main() {
         { "search", T_Search },
         { "status_services", T_StatusServices },
         { "browse", T_Browse },
+        { "next_old_server_rejects_unknown_keys", T_NextOldServerRejectsUnknownKeys },
         { "download_wav_ok", T_DownloadWavOk },
         { "download_replace_and_preserve", T_DownloadReplacesAndPreserves },
         { "download_202_then_200", T_Download202Then200 },

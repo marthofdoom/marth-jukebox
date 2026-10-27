@@ -12,6 +12,10 @@ Security note: the personal key is sent with every request. Use an `https://` se
   the per-environment checkbox is stored but switching it off has no effect yet.
 - Qobuz is never used unless you add `AllowQobuz=1` under `[General]` in `MarthJukebox.ini` (without a
   subscription Qobuz only serves 30 s previews).
+- When the Harmony server cannot be reached while music plays from it, a notification appears top-left
+  ("Jukebox: Harmony server not reachable - playing saved/vanilla music"), again every 5 minutes, and once
+  "Jukebox: Harmony is back". `[General] ToastEnabled=0` switches it off, `ToastIntervalMinutes` (1-60) sets the
+  interval. To see it: enter a wrong server address in the menu, or stop the server.
 
 ## Credits
 

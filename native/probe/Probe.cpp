@@ -6,6 +6,7 @@
 #include "PCH.h"
 #include "probe/Probe.h"
 #include "retarget/Retarget.h"
+#include "app/AppHost.h"
 
 namespace MJ::Probe {
 
@@ -310,6 +311,7 @@ namespace MJ::Probe {
                         if (g_alive) {
                             Tick();             // read-only probe
                             Retarget::Tick();   // the only engine-memory writer (guarded, see Retarget.cpp)
+                            App::TickGameThread();  // queued "Harmony not reachable" notifications
                         }
                         g_taskPending = false;
                     });

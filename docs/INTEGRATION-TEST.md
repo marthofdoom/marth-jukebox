@@ -20,10 +20,12 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
 ## 2. Configure (menu or INI) (acceptance 3)
 1. Set ServerUrl + PersonalKey, and: `explore` = Genre (a genre the library really has; the picker lists them),
    `combat` = Query `epic battle music orchestral` with streaming ON, `dungeon` = Artist from the library.
+   Note: marth's library is small, so the presets and these examples assume YouTube Music streaming for most
+   environments; a library-only selection with few tracks shows "Small selection: tracks will repeat".
    PoolSize 3. Apply (menu) or restart (INI).
 2. Expect: `[net] Connected. Sources: ...`, `[profile] published 3 environment type(s)`, `[plan] #n: engine writes on;
    3 environment(s), N music type(s) mapped to slots`, then `[pool] explore: + Artist - Title (... flac ...)` lines,
-   combat filled first, then `[slots] slot 00 (boss?) <- ...` / `[slots] slot NN (explore) <- ...`, then
+   combat filled first, then `[slots] slot NN (combat) <- ...` / `[slots] slot NN (explore) <- ...`, then
    `[retarget] MUSExploreTundra(...) -> slot NN (explore): tracks=125 replaced=...`.
 3. The key must not appear anywhere in the log (search for it).
 
@@ -32,7 +34,8 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
 2. Listen: Harmony tracks of the chosen genre, the vanilla Silent gaps still happen between tracks.
 3. Log per song change: `[slots] slot NN (explore) PLAY handle=... now playing <Artist - Title>`, ~1.5 s later
    `[slots] slot NN (explore) <- <next title>`, and a `[pool] explore: + ...` refill. Note any
-   `the previous track repeats` warning (the engine re-picked the slot before the refill landed).
+   `the previous track repeats` warning (the engine re-picked the slot before the refill landed); with a small
+   selection the status line says "Small selection: tracks will repeat" and the pool keeps playing.
 4. Harmony web UI "now playing" shows the game track.
 
 ## 4. Combat and resume (acceptance 3, 4)
@@ -47,32 +50,45 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
 ## 6. Degrade: Harmony away (acceptance 4)
 1. Stop the Harmony server (or block it) while in game. Keep playing 10 minutes, including at least 3 song changes
    in one environment.
-2. Expect `[net] next failed: kUnreachable ...; next attempt in 2 s` with growing back-off (never a tight loop),
-   tracks already pooled keep playing; when a pool runs dry: `[slots] slot NN (...): pool empty ...` and
-   `[retarget] ... RESTORED to vanilla (slot not ready ...)` once the type is idle; vanilla music plays, no silence.
-3. Start Harmony again: within the back-off the pool refills and the type is retargeted again (`-> slot NN`).
+2. Expect `[net] next failed: unreachable (...); next attempt in 2 s` (or `status failed: unreachable`, `timeout`)
+   with a growing back-off (never a tight loop). What you HEAR: tracks already pooled keep playing; when a pool runs
+   dry WHILE its music plays, earlier tracks of that environment rotate (`[slots] slot NN (...) <- REPLAY ...` and
+   `PLAY ... pool was dry, replaying recently played`), not the same song in a loop; when that music type stops,
+   `[retarget] ... RESTORED to vanilla (slot not ready ...)` and the next time vanilla music plays. Never silence.
+   An in-game notification "Jukebox: Harmony server not reachable - playing saved/vanilla music" appears after
+   about 20 s of failure (or two failed requests) and again every 5 minutes (`ToastIntervalMinutes`); none at the
+   main menu or a loading screen.
+3. Start Harmony again: within the back-off the pool refills and the type is retargeted again (`-> slot NN`); one
+   notification "Jukebox: Harmony is back".
+4. Notification triggers to check once: a wrong ServerUrl in the menu (unreachable: the same notification), a
+   wrong PersonalKey ("Jukebox: Harmony rejected the key", once per settings change), `ToastEnabled=0` (none).
 
 ## 7. Settings changes in game (acceptance 2, 4)
 1. Change `explore` to another genre, Apply. Expect `[pool] pool explore dropped`, a refill, the slot rewritten.
 2. Set `combat` to Vanilla, Apply: `RESTORED to vanilla (environment not active)` for the combat types when safe.
 3. A library-only genre with no tracks: the status line says "No matching tracks in your library ..." and the
-   environment stays vanilla; the log shows a 10 min retry, not a loop.
+   environment stays vanilla; the log shows a 10 min retry, not a loop. (Editing `MarthJukebox.ini` by hand instead of
+   the menu: do it with the game closed, or the menu's next save overwrites the edit; the plugin re-reads the INI at
+   start.)
 
 ## 8. Kill switches (acceptance 5)
-1. Create `overwrite/SKSE/Plugins/MarthJukebox.noretarget` while in game (any content). Within ~2 s:
-   `kill switch file APPEARED` and every retargeted type `RESTORED to vanilla (kill switch)` when idle. Delete it:
-   `kill switch file removed`, retargets come back.
+1. Create `overwrite/SKSE/Plugins/MarthJukebox.noretarget` while in game (any content). Within ~2 s (the slot thread
+   polls it; a download in flight is cancelled): `kill switch file APPEARED` and every retargeted type
+   `RESTORED to vanilla (kill switch)` as soon as it is idle (a type that is playing keeps its current track until it
+   stops). Delete it: `kill switch file removed`, retargets come back.
 2. `[Features] Flac=0` (restart): downloads are `.wav`.
 
 ## 9. Save/load and fast travel (acceptance 5)
 1. Save, load that save, fast travel twice, open/close the map and inventory. Expect `[retarget] kPostLoadGame: N music
-   type(s) retargeted` and music continuing; no crash.
+   type(s) retargeted`, NO `has ... entries on slot ... re-asserting` error (that would mean something rebuilt the
+   arrays), and music continuing; no crash.
 2. `[stall]` lines: gaps > 5 s are warnings (loading screens are expected); periodic ~3 s gaps are the autosaves
    (debug level).
 
 ## 10. Long session + restart (acceptance 5, 6)
 1. Play on for the rest of the 2 hours. Quit. Restart and load: expect `[pool] index loaded: k pool(s), n validated
-   track(s), 0 dropped` and immediate Harmony music (prefilled slots) before any new download.
+   track(s), 0 dropped`, `[slots] slot manifest: ... with a known track` and NO `slot NN (...) <-` rewrite for slots that
+   still hold an unplayed pool track; immediate Harmony music before any new download.
 2. Count repeats in the log for one environment (same title in two PLAY lines): expect none within 50 plays.
 
 ## Evidence to hand back

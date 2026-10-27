@@ -256,6 +256,8 @@ Defaults are safe: every environment Vanilla, and the network is off until a ser
 | `CacheDir` | empty | empty = the caller's default (`Data\SKSE\Plugins\MarthJukebox\cache`); <= 520 chars |
 | `CacheCapMB` | 4096 | 256 .. 1048576 (below 256 is raised to 256) |
 | `LogLevel` | `info` | `trace` `debug` `info` `warn` `error` `off` |
+| `ToastEnabled` | 1 | 1 = in-game notification when Harmony is not reachable while music plays from it (after ~20 s or two failed requests), repeated every `ToastIntervalMinutes`, one "Harmony is back" on recovery, and "Harmony rejected the key" once per settings change. Never without a server URL |
+| `ToastIntervalMinutes` | 5 | 1 .. 60 (out of range is clamped, logged) |
 | `AllowQobuz` | 0 | INI only (not in the menu). 1 = a streaming environment may also use Qobuz (`sources=library,ytmusic,qobuz`). Off by default: without a subscription Qobuz serves 30 s previews (DESIGN 8.8) |
 
 ### `[Features]` (kill switches, 1 = on, default all on)

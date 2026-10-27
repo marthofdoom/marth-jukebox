@@ -5,6 +5,7 @@
 #include "pool/PoolModel.h"
 
 #include <fstream>
+#include <map>
 
 using namespace mj::pool;
 namespace fs = std::filesystem;
@@ -177,9 +178,19 @@ MJ_TEST(Pool_AcceptablePicksFiltersRepeats)
 		{ "local", "new3" }
 	};
 	const auto ok = AcceptablePicks(idx, "explore", picks, 2);
-	MJ_CHECK(ok.size() == 2 && ok[0] == 2 && ok[1] == 5);
-	MJ_CHECK(AcceptablePicks(idx, "explore", picks, 10).size() == 3);
-	MJ_CHECK(AcceptablePicks(idx, "combat", picks, 10).size() == 5);  // other env: only dup/empty filtered
+	MJ_CHECK(ok.picks.size() == 2 && ok.picks[0] == 2 && ok.picks[1] == 5 && !ok.repeats);
+	MJ_CHECK(AcceptablePicks(idx, "explore", picks, 10).picks.size() == 3);
+	MJ_CHECK(AcceptablePicks(idx, "combat", picks, 10).picks.size() == 5);  // other env: only dup/empty filtered
+	// A failed download (short-lived exclude set) is skipped but does NOT count as played.
+	const auto ex = AcceptablePicks(idx, "explore", picks, 10, { "local:new1" });
+	MJ_CHECK(ex.picks.size() == 2 && ex.picks[0] == 5 && !IsRecent(idx, "explore", "local:new1"));
+	// Only repeats: the least recently played one is taken (and flagged) instead of nothing.
+	AddRecent(idx, "explore", "local:b");
+	AddRecent(idx, "explore", "local:a");
+	const auto rep = AcceptablePicks(idx, "explore", { { "local", "a" }, { "local", "b" }, { "local", "played" } }, 1);
+	MJ_CHECK(rep.repeats && rep.picks.size() == 1 && rep.picks[0] == 2);  // "played" is the oldest in the list
+	const auto rep2 = AcceptablePicks(idx, "explore", { { "local", "a" }, { "local", "b" } }, 2);
+	MJ_CHECK(rep2.repeats && rep2.picks.size() == 2 && rep2.picks[0] == 1 && rep2.picks[1] == 0);
 	MJ_CHECK(RemoveEntry(idx, "explore", "local:inpool") && idx.pools["explore"].entries.empty());
 	MJ_CHECK(!RemoveEntry(idx, "explore", "local:inpool") && !RemoveEntry(idx, "nope", "local:x"));
 }
@@ -201,4 +212,54 @@ MJ_TEST(Pool_EvictionIsLruAndNeverTouchesKeptOrForeignFiles)
 	ev = PlanEviction(files, { a, b, c, d }, 0);
 	MJ_CHECK(ev.empty());
 	MJ_CHECK(PooledFiles(PoolIndex{}).empty());
+}
+
+// Review B1: a 10-track selection played through twice must never starve the pool (the recent list holds 50).
+MJ_TEST(Pool_SmallSelectionPlaysThroughTwice)
+{
+	PoolIndex         idx;
+	const std::string env = "explore";
+	std::vector<std::string> bag;
+	for (int i = 0; i < 10; ++i) {
+		bag.push_back("t" + std::to_string(i));
+	}
+	std::size_t cursor = 0;  // the server's bag: `next` consumes `count` per call, wrapping around
+	auto next = [&](int count) {
+		std::vector<std::pair<std::string, std::string>> v;
+		for (int k = 0; k < count; ++k) {
+			v.emplace_back("local", bag[cursor++ % bag.size()]);
+		}
+		return v;
+	};
+	const std::size_t          poolSize = 3;
+	std::map<std::string, int> plays;
+	bool                       sawRepeatFlag = false;
+	std::string                last;
+	for (int play = 0; play < 20; ++play) {
+		for (int attempt = 0; attempt < 3 && idx.pools[env].entries.size() < poolSize; ++attempt) {
+			const auto picks = next(3);
+			const auto c     = AcceptablePicks(idx, env, picks, poolSize - idx.pools[env].entries.size());
+			sawRepeatFlag |= c.repeats;
+			for (const auto i : c.picks) {
+				idx.pools[env].entries.push_back(Entry(picks[i].first, picks[i].second, 1));
+			}
+		}
+		MJ_CHECK_MSG(!idx.pools[env].entries.empty(), "pool starved at play " + std::to_string(play));
+		if (idx.pools[env].entries.empty()) {
+			return;
+		}
+		const auto head = idx.pools[env].entries.front().Key();
+		MJ_CHECK_MSG(head != last, "back-to-back repeat of " + head);
+		last = head;
+		++plays[head];
+		MJ_CHECK(RemoveEntry(idx, env, head));
+		AddRecent(idx, env, head);
+	}
+	// Every track is heard; the server's bag consumes 3 per call while the pool takes fewer, so the spread is
+	// uneven (backlog: count-3-and-filter wastes picks), but nothing starves and nothing dominates.
+	MJ_CHECK(plays.size() == 10);
+	for (const auto& [k, n] : plays) {
+		MJ_CHECK_MSG(n >= 1 && n <= 3, k + " played " + std::to_string(n) + " times");
+	}
+	MJ_CHECK(sawRepeatFlag);
 }

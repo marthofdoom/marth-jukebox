@@ -3,12 +3,12 @@
 #include "slots/SlotWriter.h"
 
 #include "pool/Audio.h"
+#include "pool/PoolModel.h"
 #include "retarget/SlotAssign.h"
 
 // After the CommonLib PCH; WIN32_LEAN_AND_MEAN and NOMINMAX come from CMakePresets.json.
 #include <windows.h>
 
-#include <map>
 #include <mutex>
 #include <set>
 
@@ -20,11 +20,23 @@ namespace MJ::Slots {
 
         namespace fs = std::filesystem;
 
-        std::mutex                                    g_mx;        // guards g_manifest (one writer thread, but cheap)
-        std::map<std::string, std::set<std::uint64_t>> g_manifest;  // slot file name -> sizes we wrote
-        bool                                          g_loaded{ false };
+        struct Entry {
+            std::set<std::uint64_t> sizes;  // sizes the plugin wrote (two while a rename is pending)
+            std::string             env, key, file;
+        };
+
+        std::mutex                   g_mx;  // guards g_manifest (the slot thread is the only writer; cheap anyway)
+        std::map<std::string, Entry> g_manifest;  // slot file name -> record
+        bool                         g_loaded{ false };
 
         fs::path ManifestPath() { return PluginDir() / L"MarthJukebox" / L"slots.json"; }
+
+        fs::path SlotPath(int a_slot) { return HarmonyDir() / mj::retarget::SlotFileName(a_slot); }
+        fs::path TmpPath(int a_slot) {
+            fs::path t = SlotPath(a_slot);
+            t += L".tmp";
+            return t;
+        }
 
         bool FileSize(const fs::path& a_p, std::uint64_t& a_size) {
             WIN32_FILE_ATTRIBUTE_DATA fad{};
@@ -33,15 +45,20 @@ namespace MJ::Slots {
             return true;
         }
 
-        // Caller holds g_mx. Written via .tmp + replace; a failure is logged and returned (the slot write that
-        // needed it is then refused, so an unrecorded file can never appear).
+        // Caller holds g_mx. Written via .tmp + replace; a failure is logged and returned (the commit that needed it
+        // is then refused, so an unrecorded slot file can never appear).
         bool SaveManifestLocked() {
             nlohmann::json j;
-            j["version"] = 1;
+            j["version"] = 2;
             auto& slots  = j["slots"];
             slots        = nlohmann::json::object();
-            for (const auto& [name, sizes] : g_manifest) slots[name] = std::vector<std::uint64_t>(sizes.begin(), sizes.end());
-            const std::string text = j.dump(1);
+            for (const auto& [name, e] : g_manifest) {
+                slots[name] = { { "sizes", std::vector<std::uint64_t>(e.sizes.begin(), e.sizes.end()) },
+                                { "env", e.env },
+                                { "key", e.key },
+                                { "file", e.file } };
+            }
+            const std::string text = j.dump(1, ' ', false, nlohmann::json::error_handler_t::replace);
             const fs::path    dst  = ManifestPath();
             std::error_code   ec;
             fs::create_directories(dst.parent_path(), ec);
@@ -104,15 +121,16 @@ namespace MJ::Slots {
         return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
     }
 
-    void LoadManifest() {
-        std::scoped_lock lk(g_mx);
-        if (g_loaded) return;
-        g_loaded = true;
+    std::map<int, SlotRecord> LoadManifest() {
+        std::map<int, SlotRecord> out;
+        std::scoped_lock          lk(g_mx);
+        if (g_loaded) return out;
+        g_loaded         = true;
         const fs::path p = ManifestPath();
         HANDLE         h = ::CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) {
             spdlog::info("[slots] no slot manifest yet ({}): the plugin has not written a slot file", Utf8(p));
-            return;
+            return out;
         }
         std::string   text;
         LARGE_INTEGER sz{};
@@ -128,57 +146,79 @@ namespace MJ::Slots {
             spdlog::error("[slots] slot manifest {} is unreadable: every existing slot file is treated as NOT ours (delete the "
                           "slot_NN.wav files in Data\\Music\\Harmony to let the plugin use them again)",
                           Utf8(p));
-            return;
+            return out;
         }
-        for (const auto& [name, sizes] : j["slots"].items()) {
-            if (!sizes.is_array()) continue;
-            for (const auto& s : sizes) {
-                if (s.is_number_unsigned()) g_manifest[name].insert(s.get<std::uint64_t>());
+        auto str = [](const nlohmann::json& a_o, const char* a_k) {
+            const auto it = a_o.find(a_k);
+            return it != a_o.end() && it->is_string() ? it->get<std::string>() : std::string();
+        };
+        for (const auto& [name, rec] : j["slots"].items()) {
+            Entry e;
+            if (rec.is_array()) {  // version 1: sizes only
+                for (const auto& s : rec)
+                    if (s.is_number_unsigned()) e.sizes.insert(s.get<std::uint64_t>());
+            } else if (rec.is_object()) {
+                if (const auto it = rec.find("sizes"); it != rec.end() && it->is_array()) {
+                    for (const auto& s : *it)
+                        if (s.is_number_unsigned()) e.sizes.insert(s.get<std::uint64_t>());
+                }
+                e.env  = str(rec, "env");
+                e.key  = str(rec, "key");
+                e.file = str(rec, "file");
+                if (!mj::pool::IsCacheFileName(e.file)) e.file.clear();
             }
+            g_manifest[name] = e;
         }
-        spdlog::info("[slots] slot manifest: {} slot file(s) recorded as written by the plugin", g_manifest.size());
+        // Slots whose file still has the single recorded size and a recorded track: the content is known.
+        for (int s = 0; s < mj::retarget::kSlotCount; ++s) {
+            const auto it = g_manifest.find(mj::retarget::SlotFileName(s));
+            if (it == g_manifest.end() || it->second.sizes.size() != 1 || it->second.key.empty() || it->second.env.empty() ||
+                it->second.file.empty())
+                continue;
+            std::uint64_t cur = 0;
+            if (FileSize(SlotPath(s), cur) && cur == *it->second.sizes.begin())
+                out[s] = { it->second.env, it->second.key, it->second.file, cur };
+        }
+        spdlog::info("[slots] slot manifest: {} slot file(s) recorded as written by the plugin, {} with a known track", g_manifest.size(),
+                     out.size());
+        return out;
     }
 
     void CleanTempFiles() {
         for (int s = 0; s < mj::retarget::kSlotCount; ++s) {
-            fs::path tmp = HarmonyDir() / mj::retarget::SlotFileName(s);
-            tmp += L".tmp";
+            const fs::path tmp = TmpPath(s);
             if (::DeleteFileW(tmp.c_str())) spdlog::info("[slots] removed a stale {}", Utf8(tmp));
         }
     }
 
-    WriteResult WriteSlot(int a_slot, const fs::path& a_src, std::stop_token a_st) {
-        WriteResult r;
-        const auto  t0   = std::chrono::steady_clock::now();
-        const auto  name = mj::retarget::SlotFileName(a_slot);
-        const auto  dst  = HarmonyDir() / name;
-        fs::path    tmp  = dst;
-        tmp += L".tmp";
+    void DiscardTmp(int a_slot) { ::DeleteFileW(TmpPath(a_slot).c_str()); }
+
+    PrepResult PrepareSlot(int a_slot, const fs::path& a_src, std::stop_token a_st) {
+        PrepResult r;
+        const auto t0  = std::chrono::steady_clock::now();
+        const auto dst = SlotPath(a_slot);
+        const auto tmp = TmpPath(a_slot);
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
 
         // 1. Ownership of an existing slot file (before any work).
         std::uint64_t cur = 0;
-        const bool    exists = FileSize(dst, cur);
-        {
+        if (FileSize(dst, cur)) {
             std::scoped_lock lk(g_mx);
-            if (exists) {
-                const auto it = g_manifest.find(name);
-                if (it == g_manifest.end() || !it->second.contains(cur)) {
-                    r.error = std::format("{} exists ({} bytes) but was not written by this plugin; NOT overwritten (delete it by "
-                                          "hand to let the plugin use slot {:02})",
-                                          Utf8(dst), cur, a_slot);
-                    return r;
-                }
+            const auto       it = g_manifest.find(mj::retarget::SlotFileName(a_slot));
+            if (it == g_manifest.end() || !it->second.sizes.contains(cur)) {
+                r.error = std::format("{} exists ({} bytes) but was not written by this plugin; NOT overwritten (delete it by hand to let "
+                                      "the plugin use slot {:02})",
+                                      Utf8(dst), cur, a_slot);
+                return r;
             }
         }
-
         // 2. Decode / copy into the .tmp as a canonical WAV, flushed to disk.
         const auto cr = mj::pool::ConvertToCanonicalWav(a_src, tmp, a_st);
         if (!cr.ok) {
             ::DeleteFileW(tmp.c_str());
-            r.error     = std::format("preparing {} failed: {}", Utf8(tmp), cr.error);
-            r.retryable = cr.error == "cancelled";
+            r.sourceError = cr.sourceError;
+            r.error       = std::format("preparing {} failed: {}", Utf8(tmp), cr.error);
             return r;
         }
         // 3. Size check as the file system reports it.
@@ -188,39 +228,53 @@ namespace MJ::Slots {
             r.error = std::format("{} is {} bytes after the flush, expected {}", Utf8(tmp), got, cr.bytesWritten);
             return r;
         }
-        // 4. Record the new size BEFORE the rename (both sizes stay acceptable until the rename succeeded), so a
-        //    crash between the two never leaves a slot file the next session would refuse.
-        {
+        r.ok    = true;
+        r.bytes = got;
+        r.ms    = MsSince(t0);
+        return r;
+    }
+
+    CommitResult CommitSlot(int a_slot, std::uint64_t a_bytes, bool a_firstAttempt, const std::string& a_env, const std::string& a_key,
+                            const std::string& a_file) {
+        CommitResult r;
+        const auto   name = mj::retarget::SlotFileName(a_slot);
+        const auto   dst  = SlotPath(a_slot);
+        const auto   tmp  = TmpPath(a_slot);
+        // Record the new size BEFORE the first rename attempt (both sizes acceptable until it succeeded), so a crash
+        // between the two never leaves a slot file the next session would refuse. Not repeated on retries.
+        if (a_firstAttempt) {
+            std::uint64_t    cur = 0;
+            const bool       exists = FileSize(dst, cur);
             std::scoped_lock lk(g_mx);
-            auto&            sizes = g_manifest[name];
-            sizes.clear();
-            if (exists) sizes.insert(cur);
-            sizes.insert(got);
+            auto&            e = g_manifest[name];
+            e.sizes.clear();
+            if (exists) e.sizes.insert(cur);
+            e.sizes.insert(a_bytes);
+            e.key.clear();  // unknown until the rename succeeded
             if (!SaveManifestLocked()) {
-                ::DeleteFileW(tmp.c_str());
                 r.error = "the slot manifest could not be written; slot not replaced";
                 return r;
             }
         }
-        // 5. Rename over the slot (it may be playing; M0c).
         if (!::MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING)) {
             const DWORD err = ::GetLastError();
-            ::DeleteFileW(tmp.c_str());
-            r.retryable = err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED || err == ERROR_LOCK_VIOLATION;
-            r.error     = std::format("rename {} -> {} failed, Win32 error {}{}", Utf8(tmp), Utf8(dst), err,
-                                      err == ERROR_SHARING_VIOLATION ? " (sharing violation: the engine holds the file)" : "");
+            r.retryable     = err == ERROR_SHARING_VIOLATION || err == ERROR_LOCK_VIOLATION || err == ERROR_ACCESS_DENIED;
+            r.accessDenied  = err == ERROR_ACCESS_DENIED;
+            r.error         = std::format("rename {} -> {} failed, Win32 error {}{}", Utf8(tmp), Utf8(dst), err,
+                                          err == ERROR_SHARING_VIOLATION ? " (sharing violation: the engine holds the file)" : "");
             return r;
         }
         {
             std::scoped_lock lk(g_mx);
-            auto&            sizes = g_manifest[name];
-            sizes.clear();
-            sizes.insert(got);
-            (void)SaveManifestLocked();  // failure logged; the previous record still lists `got`
+            auto&            e = g_manifest[name];
+            e.sizes.clear();
+            e.sizes.insert(a_bytes);
+            e.env  = a_env;
+            e.key  = a_key;
+            e.file = a_file;
+            (void)SaveManifestLocked();  // failure logged; the previous record still lists the size
         }
-        r.ok    = true;
-        r.bytes = got;
-        r.ms    = MsSince(t0);
+        r.ok = true;
         return r;
     }
 

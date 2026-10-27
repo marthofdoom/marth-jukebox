@@ -6,6 +6,7 @@
 #include "config/ProfileBuilder.h"
 #include "net/HarmonyClient.h"
 #include "pool/Audio.h"
+#include "pool/ToastPolicy.h"
 #include "slots/SlotWriter.h"
 
 #include <fstream>
@@ -33,6 +34,16 @@ namespace MJ::Pool {
 
         constexpr long long kBackoffMinMs = 2'000;
         constexpr long long kBackoffMaxMs = 300'000;
+        constexpr long long kRejectShortMs = 10 * 60'000ll;    // transient download failure: skip the pick a while
+        constexpr long long kRejectLongMs  = 6 * 3600'000ll;   // the file itself is bad (preview, undecodable)
+
+        void QueueToast(const std::optional<std::string>& a_t) {
+            if (!a_t) return;
+            auto&            s = S();
+            std::scoped_lock lk(s.mx);
+            if (s.toasts.size() < 4) s.toasts.push_back(*a_t);
+            spdlog::info("[toast] {}", *a_t);
+        }
 
         std::string ToUtf8(const fs::path& p) { return Slots::Utf8(p); }
 
@@ -109,6 +120,23 @@ namespace MJ::Pool {
             return keep;
         }
 
+        // Leftovers of a crash: "<16 hex>.(wav|flac).part" (an interrupted download) and index.json.tmp. Only those
+        // exact shapes are touched.
+        void CleanOrphans() {
+            auto&           s = S();
+            std::error_code ec;
+            std::size_t     n = 0;
+            for (fs::directory_iterator it(s.cacheDir, ec), end; !ec && it != end; it.increment(ec)) {
+                const auto name = it->path().filename().string();
+                const bool part = name.ends_with(".part") && mj::pool::IsCacheFileName(name.substr(0, name.size() - 5));
+                if (part || name == std::string(mj::pool::kIndexFileName) + ".tmp") {
+                    std::error_code e2;
+                    if (fs::remove(it->path(), e2)) ++n;
+                }
+            }
+            if (n) spdlog::info("[cache] removed {} leftover partial file(s)", n);
+        }
+
         // Deletes unprotected cache files, least recently used first, down to `a_cap` (0 = all of them).
         void EnforceCap(std::uint64_t a_cap, const char* a_why) {
             auto&                            s = S();
@@ -170,8 +198,11 @@ namespace MJ::Pool {
             bool                        authStop = false;       // 401/403: no network until the settings change
             std::map<std::string, int>  prevSlots;
             std::uint64_t               planGen = 0;
-            bool                        lastKill = false;
+            mj::pool::ToastPolicy       toast;
         };
+
+        void ToastNetFailure(NetState& ns) { QueueToast(ns.toast.OnNetworkFailure(SteadyMs())); }
+        void ToastSuccess(NetState& ns) { QueueToast(ns.toast.OnSuccess(SteadyMs())); }
 
         void ApplyLogLevel(const mj::config::Settings& a_s) {
             if (auto log = spdlog::default_logger()) {
@@ -261,9 +292,10 @@ namespace MJ::Pool {
                     if (!dropped.empty()) MarkDirtyLocked();
                 }
                 for (auto& [id, ep] : plan->envs) {
-                    auto& es = s.envs[id];
-                    if (ep.streamingDropped && es.problem.empty())
-                        es.problem = "Streaming needs a newer Harmony (1.0.13+); playing from your library only";
+                    // Kept until the cause changes (the next Replan recomputes it), never cleared by a refill.
+                    s.envs[id].streamingNotice = ep.streamingDropped
+                                                     ? "Streaming needs Harmony 1.0.13+ (or AllowQobuz=1 in the INI); playing from your library only"
+                                                     : "";
                 }
                 s.plan = plan;
             }
@@ -274,6 +306,9 @@ namespace MJ::Pool {
                          plan->engineWrites ? "on" : "off", plan->why.empty() ? "" : " (" + plan->why + ")", plan->envs.size(), typesMapped);
             for (const auto& [id, ep] : plan->envs)
                 spdlog::info("[plan]   {} -> slot {} pool {} sources={}", id, ep.slot, ep.poolSize, ep.sources);
+            bool active = false;
+            for (const auto& [id, ep] : plan->envs) active |= plan->engineWrites && ep.slot >= 0;
+            ns.toast.SetActive(active);
             s.slotCv.notify_all();
         }
 
@@ -293,11 +328,14 @@ namespace MJ::Pool {
             ns.authStop        = false;
             ns.nextConnectMs   = 0;
             ns.connBackoffMs   = kBackoffMinMs;
+            ns.toast.Configure({ ns.snap->global.toastEnabled, mj::config::NetworkActive(*ns.snap),
+                                 static_cast<long long>(ns.snap->global.toastIntervalMinutes) * 60'000ll });
             {
                 std::scoped_lock lk(s.mx);
                 s.capBytes = static_cast<std::uint64_t>(ns.snap->global.cacheCapMB) * 1048576ull;
                 for (auto& [id, es] : s.envs) {
                     es.problem.clear();
+                    es.smallSelection = false;
                     es.backoffUntilMs = 0;
                     es.failures       = 0;
                 }
@@ -327,18 +365,19 @@ namespace MJ::Pool {
             Replan(ns);
         }
 
-        std::string ConnMessage(const Net::StatusResult& st) {
+        std::string ConnMessage(const Net::StatusResult& st, bool a_allowQobuz) {
             std::string srcs;
             auto        add = [&](const char* n) { srcs += srcs.empty() ? n : std::string(", ") + n; };
             if (st.servicesReported) {
                 if (st.libraryUsable) add("Library");
                 if (st.ytmusicUsable) add("YouTube Music");
-                if (st.qobuzUsable) add("Qobuz");
+                if (st.qobuzUsable && a_allowQobuz) add("Qobuz");
             }
             const bool flac = std::find(st.containers.begin(), st.containers.end(), "flac") != st.containers.end();
             std::string m   = "Connected.";
             if (st.servicesReported) m += srcs.empty() ? " No music source is usable on the server." : " Sources: " + srcs + ".";
-            else m += " This Harmony is older than 1.0.13: library only, no streaming choice.";
+            else if (a_allowQobuz) m += " This Harmony is older than 1.0.13: streaming environments use all its sources (Qobuz included, AllowQobuz=1).";
+            else m += " This Harmony is older than 1.0.13: library only (streaming needs 1.0.13+, or AllowQobuz=1).";
             m += flac ? " FLAC transfer available." : " WAV transfer.";
             return m;
         }
@@ -349,6 +388,7 @@ namespace MJ::Pool {
             ns.nextConnectMs = now + ns.connBackoffMs;
             spdlog::warn("[net] {} failed: {} ({}); next attempt in {} s", a_what, Net::ErrorName(r.error), r.message, ns.connBackoffMs / 1000);
             ns.connBackoffMs = std::min(ns.connBackoffMs * 2, kBackoffMaxMs);
+            ToastNetFailure(ns);
         }
 
         std::string PlainNetError(const Net::Result& r) {
@@ -379,8 +419,10 @@ namespace MJ::Pool {
                     if (st.error == Net::Error::kBadKey || st.error == Net::Error::kDisabled) {
                         ns.authStop = true;
                         spdlog::error("[net] {}: no further requests until the settings change", msg);
+                        if (st.error == Net::Error::kBadKey) QueueToast(ns.toast.OnAuthFailure(SteadyMs()));
+                        else ToastNetFailure(ns);  // the game source is off on the server: "not reachable" for us
                     } else {
-                        NetFailure(ns, st, "status");
+                        NetFailure(ns, st, "status");  // includes a bad status (disabled / no ffmpeg)
                     }
                     return false;
                 }
@@ -389,8 +431,9 @@ namespace MJ::Pool {
                 ns.statusKnown   = true;
                 ns.connected     = true;
                 ns.connBackoffMs = kBackoffMinMs;
-                SetConn(true, true, ConnMessage(st), &ns);
-                spdlog::info("[net] {}", ConnMessage(st));
+                SetConn(true, true, ConnMessage(st, ns.snap->global.allowQobuz), &ns);
+                spdlog::info("[net] {}", ConnMessage(st, ns.snap->global.allowQobuz));
+                ToastSuccess(ns);
                 if (firstCaps) Replan(ns);  // sources (and so fingerprints) depend on the capabilities
             }
             if (ns.needProfile) {
@@ -439,6 +482,10 @@ namespace MJ::Pool {
                 a_why = std::format("preview or truncated stream ({:.1f} s of {:.0f} s)", r.durationS, a_expectedS);
                 return false;
             }
+            if (a_expectedS > 0.0 && r.durationS > 1.1 * a_expectedS + 30.0) {
+                a_why = std::format("far longer than announced ({:.0f} s of {:.0f} s)", r.durationS, a_expectedS);
+                return false;
+            }
             return true;
         }
 
@@ -449,6 +496,20 @@ namespace MJ::Pool {
             es.failures++;
             es.backoffUntilMs = SteadyMs() + a_ms;
             if (!a_problem.empty()) es.problem = std::move(a_problem);
+        }
+
+        // Settings changed, kill switch, clear-cache, stop: the current refill must yield (A-F3).
+        bool AbortWanted(const NetState& ns, const std::stop_token& a_st) {
+            auto&            s = S();
+            std::scoped_lock lk(s.mx);
+            return a_st.stop_requested() || s.settingsDirty || s.replanWanted || s.clearCacheRequested || s.killFile.load() ||
+                   s.store->Revision() != ns.seenRev;
+        }
+
+        void Reject(const std::string& a_env, const std::string& a_key, long long a_ms) {
+            auto&            s = S();
+            std::scoped_lock lk(s.mx);
+            s.envs[a_env].rejected[a_key] = SteadyMs() + a_ms;
         }
 
         // One refill step for the neediest environment. Returns true when it did network work.
@@ -494,7 +555,10 @@ namespace MJ::Pool {
             const bool    flac = ns.snap->global.features.flac && ns.statusKnown &&
                               std::find(ns.status.containers.begin(), ns.status.containers.end(), "flac") != ns.status.containers.end();
             const int count = std::clamp(std::max(3, need), 1, 10);
-            const auto nr   = ns.client.Next(ns.snap->global.harmonyProfileName, ep.id, ep.sources, count, false, flac ? "flac" : "wav", a_st);
+            // The container is sent ONLY for FLAC: a Harmony before 1.0.13 rejects unknown keys in `next` (review B2), and
+            // WAV is its default anyway.
+            const auto nr   = ns.client.Next(ns.snap->global.harmonyProfileName, ep.id, ep.sources, count, false, flac ? "flac" : "", a_st);
+            if (nr.Ok()) ToastSuccess(ns);
             if (!nr.Ok()) {
                 switch (nr.error) {
                 case Net::Error::kCancelled: return false;
@@ -504,6 +568,7 @@ namespace MJ::Pool {
                 case Net::Error::kDisabled:
                     ns.authStop = true;
                     SetConn(true, false, PlainNetError(nr), &ns);
+                    if (nr.error == Net::Error::kBadKey) QueueToast(ns.toast.OnAuthFailure(SteadyMs()));
                     return false;
                 case Net::Error::kNoTracks:
                     EnvBackoff(ep.id, 600'000, ep.sources == "library" ? "No matching tracks in your library (try another genre or allow streaming)"
@@ -534,17 +599,33 @@ namespace MJ::Pool {
             }
             std::vector<std::pair<std::string, std::string>> pairs;
             for (const auto& t : nr.tracks) pairs.emplace_back(t.service, t.id);
-            std::vector<std::size_t> ok;
+            mj::pool::PickChoice choice;
             {
-                std::scoped_lock lk(s.mx);
-                ok = mj::pool::AcceptablePicks(s.index, ep.id, pairs, static_cast<std::size_t>(need));
+                std::scoped_lock      lk(s.mx);
+                auto&                 es  = s.envs[ep.id];
+                const long long       now = SteadyMs();
+                std::set<std::string> exclude;
+                for (auto it = es.rejected.begin(); it != es.rejected.end();) {
+                    if (it->second <= now) {
+                        it = es.rejected.erase(it);
+                    } else {
+                        exclude.insert(it->first);
+                        ++it;
+                    }
+                }
+                choice            = mj::pool::AcceptablePicks(s.index, ep.id, pairs, static_cast<std::size_t>(need), exclude);
+                es.smallSelection = choice.repeats;
+                if (choice.repeats)
+                    spdlog::info("[pool] {}: only recently played tracks came back (small selection, server pool {}): taking the least "
+                                 "recently played", ep.id, nr.poolSize);
             }
+            const auto& ok = choice.picks;
             if (ok.size() < pairs.size())
-                spdlog::info("[pool] {}: {} of {} pick(s) skipped (recently played, already pooled or duplicate)", ep.id, pairs.size() - ok.size(),
-                             pairs.size());
+                spdlog::info("[pool] {}: {} of {} pick(s) skipped (recently played, already pooled, just failed or duplicate)", ep.id,
+                             pairs.size() - ok.size(), pairs.size());
             int added = 0;
             for (const auto i : ok) {
-                if (a_st.stop_requested()) return true;
+                if (AbortWanted(ns, a_st)) return true;
                 const auto&       t    = nr.tracks[i];
                 const std::string cont = ContainerOf(t.audioUrl);
                 const std::string file = mj::pool::CacheFileName(t.service, t.id, cont);
@@ -553,11 +634,17 @@ namespace MJ::Pool {
                 std::string       why;
                 std::error_code   ec;
                 bool              good = false;
-                if (fs::exists(path, ec) && ValidateFile(path, static_cast<double>(t.durationS), why, a_st)) {
+                long long         rejectMs = kRejectShortMs;
+                bool              kept = false;  // pooled elsewhere / in a slot / being read: already validated, never replaced
+                {
+                    std::scoped_lock lk(s.mx);
+                    kept = KeepSetLocked().contains(file);
+                }
+                if (fs::exists(path, ec) && (kept || ValidateFile(path, static_cast<double>(t.durationS), why, a_st))) {
                     fs::last_write_time(path, fs::file_time_type::clock::now(), ec);  // LRU touch
                     good = true;
                     spdlog::info("[pool] {}: cache hit {} for a pick", ep.id, file);
-                } else {
+                } else if (!kept) {
                     const auto dr = ns.client.DownloadAudio(t.audioUrl, path, static_cast<double>(t.durationS), a_st);
                     if (dr.error == Net::Error::kCancelled) return true;
                     if (dr.error == Net::Error::kTimeout || dr.error == Net::Error::kUnreachable) {
@@ -566,18 +653,26 @@ namespace MJ::Pool {
                     }
                     if (!dr.Ok()) {
                         why = std::format("{} ({})", Net::ErrorName(dr.error), dr.message);
+                        if (dr.error == Net::Error::kPreviewOrTruncated || dr.error == Net::Error::kBadAudio) rejectMs = kRejectLongMs;
                     } else if (ValidateFile(path, static_cast<double>(t.durationS), why, a_st)) {
                         good = true;
+                        ToastSuccess(ns);
                     } else {
-                        fs::remove(path, ec);
+                        rejectMs = kRejectLongMs;
+                        bool held = false;
+                        {
+                            std::scoped_lock lk(s.mx);
+                            held = KeepSetLocked().contains(file);
+                        }
+                        // Never delete a file a pool, a slot or the slot thread holds (review B SEV-4). Only this thread
+                        // adds pool entries, so the check cannot go stale before the remove.
+                        if (!held) fs::remove(path, ec);
                     }
                 }
                 if (!good) {
-                    // Never offer this pick again soon (a Qobuz preview, a broken stream...).
-                    spdlog::warn("[pool] {}: pick rejected: {}; file {}", ep.id, why, file);
-                    std::scoped_lock lk(s.mx);
-                    mj::pool::AddRecent(s.index, ep.id, mj::pool::TrackKey(t.service, t.id));
-                    MarkDirtyLocked();
+                    // Skipped for a while, but NOT counted as played (review B1).
+                    spdlog::warn("[pool] {}: pick rejected for {} min: {}; file {}", ep.id, rejectMs / 60'000, why, file);
+                    Reject(ep.id, mj::pool::TrackKey(t.service, t.id), rejectMs);
                     continue;
                 }
                 mj::pool::PoolEntry e;
@@ -616,7 +711,7 @@ namespace MJ::Pool {
                              std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
             }
             if (added == 0 && !ok.empty()) EnvBackoff(ep.id, 15'000, "");
-            if (ok.empty()) EnvBackoff(ep.id, 20'000, "");  // only repeats came back: let the server's bag move on
+            if (ok.empty()) EnvBackoff(ep.id, 20'000, "");  // nothing usable came back: let the server's bag move on
             EnforceCap(S().capBytes, "cache cap");
             return true;
         }
@@ -646,15 +741,17 @@ namespace MJ::Pool {
             fs::create_directories(s.cacheDir, ec);
             if (ec) spdlog::error("[pool] cannot create the cache dir {}: {}", Slots::Utf8(s.cacheDir), ec.message());
             spdlog::info("[pool] cache dir {}", Slots::Utf8(s.cacheDir));
+            CleanOrphans();
             LoadIndex();
             EnforceCap(s.capBytes, "startup cap check");
-            s.killFile = Slots::KillSwitchFilePresent();
-            if (s.killFile) spdlog::warn("[retarget] KILL SWITCH file present: no retarget this session (until it is removed)");
-            ns.lastKill = s.killFile;
+            // The slot thread polls the kill-switch file every 2 s; this first check covers the time before that.
+            if (Slots::KillSwitchFilePresent() && !s.killFile.exchange(true))
+                spdlog::warn("[retarget] KILL SWITCH file present: no retarget this session (until it is removed)");
 
-            long long lastKillPoll = SteadyMs();
             while (!a_st.stop_requested()) {
-                bool dirty = false, clear = false, cat = false;
+                bool dirty = false, clear = false, cat = false, replan = false;
+                // A fresh per-job stop source (NET-CLIENT.md): SettingsChanged() / the kill switch cancel only this job.
+                std::stop_source job;
                 {
                     std::scoped_lock lk(s.mx);
                     dirty                 = s.settingsDirty || s.store->Revision() != ns.seenRev;
@@ -662,30 +759,25 @@ namespace MJ::Pool {
                     clear                 = s.clearCacheRequested;
                     s.clearCacheRequested = false;
                     cat                   = s.haveCatalogue && ns.planGen == 0;
+                    replan                = s.replanWanted;
+                    s.replanWanted        = false;
                     s.poolWake            = false;
+                    s.jobStop             = job;
                 }
+                std::stop_callback onStop(a_st, [job]() mutable { job.request_stop(); });
                 if (dirty) OnSettings(ns);
-                else if (cat) Replan(ns);
+                else if (cat || (replan && ns.snap)) Replan(ns);
                 if (clear) {
                     EnforceCap(0, "Clear cache");
                 }
-                if (SteadyMs() - lastKillPoll >= 2000) {
-                    lastKillPoll = SteadyMs();
-                    const bool k = Slots::KillSwitchFilePresent();
-                    s.killFile   = k;
-                    if (k != ns.lastKill) {
-                        ns.lastKill = k;
-                        spdlog::warn("[retarget] kill switch file {}", k ? "APPEARED: retarget stops, originals restored when safe" : "removed");
-                        if (ns.snap) Replan(ns);
-                    }
-                }
+                QueueToast(ns.toast.Tick(SteadyMs()));
                 bool worked = false;
-                if (EnsureConnected(ns, a_st)) worked = RefillOnce(ns, a_st);
+                if (EnsureConnected(ns, job.get_token())) worked = RefillOnce(ns, job.get_token());
                 SaveIndexIfDirty();
                 if (worked) continue;
                 std::unique_lock lk(s.mx);
                 (void)s.poolCv.wait_for(lk, a_st, 1000ms, [&] {
-                    return s.settingsDirty || s.clearCacheRequested || s.poolWake || s.store->Revision() != ns.seenRev ||
+                    return s.settingsDirty || s.clearCacheRequested || s.poolWake || s.replanWanted || s.store->Revision() != ns.seenRev ||
                            (s.haveCatalogue && ns.planGen == 0);
                 });
             }
@@ -733,7 +825,17 @@ namespace MJ::Pool {
         auto&            s = S();
         std::scoped_lock lk(s.mx);
         s.settingsDirty = true;
+        s.jobStop.request_stop();  // signal only: a download in flight returns kCancelled at once (A-F3)
         s.poolCv.notify_all();
+    }
+
+    std::optional<std::string> PopToast() {
+        auto&            s = S();
+        std::scoped_lock lk(s.mx);
+        if (s.toasts.empty()) return std::nullopt;
+        auto t = std::move(s.toasts.front());
+        s.toasts.pop_front();
+        return t;
     }
 
     void ClearCache() {
@@ -810,7 +912,11 @@ namespace MJ::Pool {
                 for (const auto& e : p->second.entries) r.titles.push_back(e.Display());
             }
             if (const auto e = s.envs.find(id); e != s.envs.end()) {
-                r.problem    = e->second.problem;
+                std::string p = e->second.problem;
+                auto        add = [&p](const std::string& a_t) { p += (p.empty() || a_t.empty() ? "" : "; ") + a_t; };
+                add(e->second.streamingNotice);
+                if (e->second.smallSelection) add("Small selection: tracks will repeat (pick a broader genre or allow streaming)");
+                r.problem    = p;
                 r.nowPlaying = e->second.nowPlaying;
             }
             out.push_back(std::move(r));

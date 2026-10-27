@@ -31,6 +31,9 @@ namespace mj::config
 	inline constexpr int kCacheCapDefaultMB = 4096;
 	inline constexpr int kCacheCapMaxMB     = 1'048'576;  // 1 TiB: a typo guard, not a policy
 	inline constexpr int kPoolSizes[]       = { 3, 5, 8 };
+	inline constexpr int kToastIntervalMinMin     = 1;
+	inline constexpr int kToastIntervalDefaultMin = 5;
+	inline constexpr int kToastIntervalMaxMin     = 60;
 	inline constexpr std::size_t kMaxTextLen       = 1024;  // hard cap when loading; ProfileBuilder enforces Harmony's 200
 	inline constexpr std::size_t kMaxEnvironments  = 128;
 	inline constexpr const char* kDefaultProfileName = "skyrim-jukebox";
@@ -72,6 +75,8 @@ namespace mj::config
 		int         cacheCapMB = kCacheCapDefaultMB;
 		LogLevel    logLevel   = LogLevel::Info;
 		bool        allowQobuz = false;  // [General] AllowQobuz: INI only, never in the menu (DESIGN 8.8)
+		bool        toastEnabled = true;                            // in-game "Harmony not reachable" notifications
+		int         toastIntervalMinutes = kToastIntervalDefaultMin;  // repeat interval while it stays down (1..60)
 		Features    features;
 	};
 

@@ -18,10 +18,15 @@
 namespace MJ::Pool::detail {
 
     struct EnvState {
-        std::string problem;            // plain language for the menu ("" = none)
+        std::string problem;            // plain language for the menu ("" = none); cleared when a track arrives
+        std::string streamingNotice;    // set by every Replan from the plan (streaming not possible on this server)
+        bool        smallSelection = false;  // the last refill could only offer recently played tracks
         long long   backoffUntilMs = 0; // SteadyMs(): no `next` for this environment before then
         int         failures = 0;
         std::string nowPlaying;
+        // Picks whose download or validation just failed (busy, deadline, truncated, preview, bad audio...): skipped
+        // until the time given, and NEVER counted as played (review B1).
+        std::map<std::string, long long> rejected;
     };
 
     struct SlotState : SlotView {
@@ -32,8 +37,16 @@ namespace MJ::Pool::detail {
         bool          refreshPending = false;
         long long     refreshAtMs = 0;
         std::uint32_t eventHandle = 0, eventIdx = 0;
-        long long     retryAtMs = 0;  // after a retryable write failure
+        long long     retryAtMs = 0;  // after a failed write
         std::string   lastError;
+        bool          replay = false; // the file holds an already played track (pool dry while the type plays, A-F2)
+        // A prepared slot_NN.wav.tmp whose rename failed (A-F1): only the rename is retried.
+        bool          prepared = false;
+        std::string   prepEnv, prepKey, prepFile, prepDisplay;
+        bool          prepReplay = false;
+        std::uint64_t prepBytes = 0;
+        int           renameAttempts = 0;
+        int           deniedAttempts = 0;
     };
 
     struct PlayEvent {
@@ -67,6 +80,9 @@ namespace MJ::Pool::detail {
         ConnReport                  conn;
         bool                        settingsDirty = true;
         bool                        poolWake = false;   // MarkDirtyLocked / new pool work: wake the pool thread once
+        bool                        replanWanted = false;  // the kill-switch file changed (slot thread poll)
+        std::stop_source            jobStop;            // the pool thread's current network job (A-F3)
+        std::deque<std::string>     toasts;             // in-game notifications for the game thread
         bool                        clearCacheRequested = false;
         PlayedFn                    played;
 

@@ -69,14 +69,21 @@ modlist (Requiem, LoreRim...). Instead the plugin edits the winning in-memory MU
    environment's types still point at it.
    **Never silence the game**: a type is pointed at its slot only while the slot holds an unplayed track of its
    environment (or for 10 s after a play while the refill is due); otherwise its original tracks are restored
-   (when safe) and that is logged loudly. A slot re-picked by the engine before its refill landed replays the
-   previous track (logged as a repeat). Remember-place ON is the engine's own resume (M0b); OFF has no safe
+   (when safe) and that is logged loudly. **Pool dry while the type is playing** (Harmony down, or a refill not in
+   yet): the slot is refilled with the environment's recently played tracks that are still in the cache, least
+   recently played first, so the player hears a rotation of earlier tracks instead of the same song in a loop; only
+   if none is cached does the last track repeat (logged). As soon as the type stops, the vanilla tracks come back.
+   A rename that fails (Windows sharing violation) keeps the prepared `.tmp` and retries only the rename (2, 5, 15,
+   then 60 s, and only while that slot is not the one playing; access-denied gives up after 3 tries, loudly).
+   While at least one environment plays from Harmony and the server stays unreachable, an in-game notification says
+   so (`[General] ToastEnabled`, every `ToastIntervalMinutes`, default 5; one "Harmony is back" on recovery).
+   Remember-place ON is the engine's own resume (M0b); OFF has no safe
    read-only mechanism yet, so 1.0 stores the setting and behaves as ON.
    Threads: game thread = probe + retarget only; pool thread = settings load, Harmony, pools, cache; slot thread
    = slot files; UI thread (app/) = connection test, search, preview, now-playing reports. Kill switches:
    `[Features] Retarget/Network/Flac`, the file `Data\SKSE\Plugins\MarthJukebox.noretarget` (restores
    everything when it appears), no ServerUrl = everything Vanilla and no network.
-   Measured on harmony:8080 (2026-10-27): cold+normalize 29 s, cold 6.9 s, cached 0.6 s: hidden by the pool.
+   Measured on the test server (2026-10-27): cold+normalize 29 s, cold 6.9 s, cached 0.6 s: hidden by the pool.
 5. **Network = WinHTTP** (no extra deps, works under Wine/Proton, https for free).
 6. **Settings UI (marth 2026-10-27: an SKSE menu)**: an ImGui page registered with the SKSE Menu
    Framework (Nexus SSE; a shared window that mods register pages with; hard requirement, to be
@@ -162,7 +169,11 @@ sharing violation is retried, never forced) and 48 kHz files in the field (Harmo
   remember-place. The engine-dependent design (what happens when the engine re-picks a slot, crossfade,
   resume position) waits for the M0b log; the menu, the Harmony client and the Harmony-side FLAC change do not.
 
-**8.7 Requirement: almost never the same track twice (marth 2026-10-27).** A player who picks a genre should
+**8.7 Requirement: almost never the same track twice (marth 2026-10-27).** (As built: the recent list prefers unplayed
+picks but never starves a small selection: when only recently played tracks come back, the least recently played is
+taken and the menu says "Small selection: tracks will repeat"; a failed download is skipped for a while but never
+counts as played. When Harmony is down and a pool runs dry during play, recently played cached tracks rotate, DESIGN
+3 item 4.) A player who picks a genre should
 essentially never hear a repeat. Two layers:
 - **Harmony (branch `game-pools`)**: deeper streaming candidate lists (paging past 25 per query, a few query
   variants, mood/genre playlists where the provider allows), cross-service de-duplication, and a bag whose

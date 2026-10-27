@@ -43,6 +43,7 @@ namespace MJ::Retarget {
             std::string                                  boundEnv;
             std::map<std::uint32_t, RE::BSIMusicTrack*>  originals;
             std::uint32_t                                appliedSize{ 0 };
+            std::uint32_t                                ourCount{ 0 };   // entries pointing at the slot after Apply()
             bool                                         deferLogged{ false };
         };
         std::vector<TypeState>                                 g_types;  // catalogue order (== Plan::typeSlot index)
@@ -144,6 +145,7 @@ namespace MJ::Retarget {
             a_t.bound       = a_slot;
             a_t.boundEnv    = a_env;
             a_t.appliedSize = n;
+            a_t.ourCount    = replaced + moved + already;
             spdlog::info("[retarget] {} -> slot {:02} ({}): tracks={} replaced={} moved={} already={} kept-silent={} kept-other={} originals={}",
                          a_t.name, a_slot, a_env, n, replaced, moved, already, silent, other, a_t.originals.size());
         }
@@ -278,9 +280,18 @@ namespace MJ::Retarget {
 
     void LogState(const char* a_why) {
         std::size_t bound = 0;
-        for (const auto& t : g_types) {
+        for (auto& t : g_types) {
             if (t.bound < 0) continue;
             ++bound;
+            // A-F10 (read-only): after a load the bound types must still hold exactly the entries we placed. A mismatch
+            // (something rebuilt or edited the array) is logged loudly and re-asserted on the next safe tick.
+            std::uint32_t ours = 0;
+            for (std::uint32_t i = 0; i < t.type->tracks.size(); ++i) ours += t.type->tracks[i] == g_iface[t.bound];
+            if (ours != t.ourCount || t.type->tracks.size() != t.appliedSize) {
+                spdlog::error("[retarget] {}: {} has {} entries on slot {:02} (expected {}), tracks={} (was {}); re-asserting when safe",
+                              a_why, t.name, ours, t.bound, t.ourCount, t.type->tracks.size(), t.appliedSize);
+                t.appliedSize = 0;  // forces Apply() on the next tick where the type is safe
+            }
             spdlog::info("[retarget] {}: {} -> slot {:02} ({}) tracks={} originals={} typeStatus={}", a_why, t.name, t.bound, t.boundEnv,
                          t.type->tracks.size(), t.originals.size(), StatusName(t.type->typeStatus.underlying()));
         }

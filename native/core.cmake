@@ -14,6 +14,7 @@ add_library(mj_core STATIC
     ${CMAKE_CURRENT_LIST_DIR}/pool/PoolModel.cpp
     ${CMAKE_CURRENT_LIST_DIR}/pool/Audio.cpp
     ${CMAKE_CURRENT_LIST_DIR}/pool/DrFlac.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/pool/ToastPolicy.cpp
     ${CMAKE_CURRENT_LIST_DIR}/retarget/SlotAssign.cpp
 )
 target_compile_features(mj_core PUBLIC cxx_std_23)
@@ -38,6 +39,7 @@ if(MJ_BUILD_TESTS)
         tests/core/PoolTests.cpp
         tests/core/AudioTests.cpp
         tests/core/SlotAssignTests.cpp
+        tests/core/ToastTests.cpp
     )
     target_compile_features(mj_core_tests PRIVATE cxx_std_23)
     target_include_directories(mj_core_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR})

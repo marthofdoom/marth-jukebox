@@ -280,23 +280,52 @@ namespace mj::pool
 		}
 	}
 
-	std::vector<std::size_t> AcceptablePicks(const PoolIndex& index, std::string_view envId,
-		const std::vector<std::pair<std::string, std::string>>& picks, std::size_t want)
+	PickChoice AcceptablePicks(const PoolIndex& index, std::string_view envId,
+		const std::vector<std::pair<std::string, std::string>>& picks, std::size_t want, const std::set<std::string>& exclude)
 	{
-		std::vector<std::size_t>        out;
+		PickChoice                      out;
 		std::unordered_set<std::string> taken;
 		if (const auto p = index.pools.find(envId); p != index.pools.end()) {
 			for (const auto& e : p->second.entries) {
 				taken.insert(e.Key());
 			}
 		}
-		for (std::size_t i = 0; i < picks.size() && out.size() < want; ++i) {
+		const std::deque<std::string>* recent = nullptr;
+		if (const auto r = index.recent.find(envId); r != index.recent.end()) {
+			recent = &r->second;
+		}
+		// Eligible picks with their recent-list position (-1 = not played recently; larger = played later).
+		std::vector<std::pair<std::size_t, long long>> eligible;
+		for (std::size_t i = 0; i < picks.size(); ++i) {
 			const auto key = TrackKey(picks[i].first, picks[i].second);
-			if (picks[i].first.empty() || picks[i].second.empty() || IsRecent(index, envId, key) || !taken.insert(key).second) {
+			if (picks[i].first.empty() || picks[i].second.empty() || exclude.contains(key) || !taken.insert(key).second) {
 				continue;
 			}
-			out.push_back(i);
+			long long pos = -1;
+			if (recent) {
+				if (const auto f = std::find(recent->begin(), recent->end(), key); f != recent->end()) {
+					pos = f - recent->begin();
+				}
+			}
+			eligible.emplace_back(i, pos);
 		}
+		for (const auto& [i, pos] : eligible) {
+			if (pos < 0 && out.picks.size() < want) {
+				out.picks.push_back(i);
+			}
+		}
+		if (!out.picks.empty() || eligible.empty()) {
+			return out;
+		}
+		// Only repeats came back: least recently played first.
+		std::stable_sort(eligible.begin(), eligible.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+		for (const auto& [i, pos] : eligible) {
+			if (out.picks.size() >= want) {
+				break;
+			}
+			out.picks.push_back(i);
+		}
+		out.repeats = !out.picks.empty();
 		return out;
 	}
 

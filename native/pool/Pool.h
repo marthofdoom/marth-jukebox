@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,7 +68,9 @@ namespace MJ::Pool {
     // Main-thread view of the slot's current play (for the 1.5 s stability rule).
     void PublishPlay(int a_slot, bool a_current, std::uint32_t a_handle, std::uint32_t a_idx);
     void PostPlayEvent(int a_slot, const std::string& a_env, std::uint32_t a_handle, std::uint32_t a_idx);
-    bool KillSwitchSeen();   // the pool thread's 2 s poll of the kill-switch file
+    bool KillSwitchSeen();   // the slot thread's 2 s poll of the kill-switch file
+    // Next in-game notification text queued by the pool thread (pool/ToastPolicy.h), if any. Game thread shows it.
+    std::optional<std::string> PopToast();
     long long SteadyMs();
 
     // ---- status for the menu (any thread) ----

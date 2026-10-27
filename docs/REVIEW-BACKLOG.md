@@ -33,7 +33,7 @@
 - SEV-4 `CopyDurable` no-overwrite is check-then-create (TOCTOU): uses `exists()` then `CREATE_ALWAYS`/`O_CREAT|O_TRUNC`. Fix: create-new flag in `WriteFileDurable` (`CREATE_NEW` / `O_CREAT|O_EXCL`), name loop moves to the next suffix on `ERROR_FILE_EXISTS`/`EEXIST`.
 - SEV-4 a failed copy leaves a partial file: `.bak` `CREATE_ALWAYS` truncates the previous good backup before the write can fail (INI itself stays intact; Save refuses). Fix: write `.bak` as tmp then replace, or delete the partial on failure.
 - SEV-5 misleading error text: copy failures say "temporary settings file".
-- SEV-4 docs disagree on Qobuz: docs/ENVIRONMENTS.md:277 ("`sources=all` (YouTube Music; never Qobuz)") vs ENVIRONMENTS.md:313 and DESIGN 8.8 (`all` includes Qobuz until Harmony accepts a source list) vs docs/NEXUS-COMPLIANCE.md:15 ("library ... plus Qobuz"). Fix in one docs commit; note Harmony game-pools now accepts a `sources` list and `game_excluded_services`, so streaming can be sent as `ytmusic` only.
+- **CLOSED (core-playback, b3564bd + fix round)**: ENVIRONMENTS.md, NEXUS-COMPLIANCE.md and DESIGN 8.8 now all say `library` / `library,ytmusic`, Qobuz only with `AllowQobuz=1`. Original entry: SEV-4 docs disagree on Qobuz: docs/ENVIRONMENTS.md:277 ("`sources=all` (YouTube Music; never Qobuz)") vs ENVIRONMENTS.md:313 and DESIGN 8.8 (`all` includes Qobuz until Harmony accepts a source list) vs docs/NEXUS-COMPLIANCE.md:15 ("library ... plus Qobuz"). Fix in one docs commit; note Harmony game-pools now accepts a `sources` list and `game_excluded_services`, so streaming can be sent as `ytmusic` only.
 
 ## net-client, raised against 0e98fbb (Opus 5.5 review; deferred by the fix round, wording from the review brief)
 
@@ -52,3 +52,40 @@ Note: the `core-settings` branch also edits this file; merge both sections.
 - **SEV-5** A 4 MiB JSON body can build a ~60 MB nlohmann DOM.
 - **SEV-5** An `http://` base sends the key in clear text (documented: README / NEXUS-COMPLIANCE recommend
   `https://` off-LAN).
+
+## core-playback, raised against b3564bd (two Opus 5.5 reviews, A and B; deferred by the coordinator, not fixed)
+
+Note: the reviewers' full reports were not on disk for the author; the wording below is taken from reviewer A's log
+and the coordinator's fix-round message, and marked where it is a summary.
+
+- **SEV-4 A-F5** (review A log: "F5/F6 SEV-4 event attribution"): play-event attribution, part 1. A play event is
+  attributed to the slot's current owner environment; an event that races a plan change can be credited to the wrong
+  environment (summary).
+- **SEV-4 A-F6** (same log line): play-event attribution, part 2 (summary; see reviewer A's report).
+- **SEV-4 A-F9** (review A log: "F9 plan/bound race"): the slot thread reads `bound` and the plan under the lock, but the
+  game thread publishes `bound` after its writes of the same tick, so for up to one tick a slot write can be decided on a
+  stale binding (summary).
+- **SEV-5 A-F12** (review A log: "F10-12 SEV-5"): minor, see reviewer A's report (not itemised in the log).
+- **SEV-5 A-F13** (review A log: "F13 harmony:8080 in DESIGN (pre-existing)"): the host name. FIXED in this round as
+  coordinator item A-F11 (DESIGN, ROADMAP and the tests no longer name the server); kept here for the record.
+- **SEV-4 A-F14** (review A log: "F14 no post-load entry check"): FIXED in this round as coordinator item A-F10
+  (OnGameLoaded counts our entries per bound type and re-asserts on a mismatch); kept here for the record.
+- **SEV-4 B** cache overshoot and pooledBytes double count: the cap check counts pooled bytes per pool, a file pooled in
+  two environments counts twice, and a download can push the cache above `CacheCapMB` until the next eviction.
+- **SEV-4 B** genre mode needs a library: genres come from the live library only, so a streaming-only user cannot pick
+  a genre in the menu (Query works).
+- **SEV-5 B** artist browse is cut at 200 hits with no notice in the menu.
+- **SEV-5 B** "Show next up" peeks the server bag, not the pool: `EnvStatus.poolTitles` is what actually plays next.
+- **SEV-5 B** count-3-and-filter wastes picks: `next` consumes 3 from the server bag while the pool may take fewer
+  (visible in the small-selection test as an uneven spread).
+- **SEV-5 B** bad key vs bad address message (App.cpp:67 / PoolWorker.cpp:323): an invalid address and a refused key can
+  read alike in the menu.
+
+### In-game checklist from review A (10 items) -> docs/INTEGRATION-TEST.md
+
+The checklist itself was not in reviewer A's log; the integration test covers, after this round: first run without a
+server (§1), the profile/plan/prefill log lines (§2), play events and refills (§3), resume after combat (§4),
+diegetic types untouched (§5), Harmony away incl. the replay rotation and the notifications (§6), settings changes
+incl. pool drops and no_tracks (§7), the kill switch timing (§8), save/load with the post-load entry check (§9),
+restart with known slot contents and no rewrite (§10). Coordinator: map reviewer A's 10 items onto these before the
+test cycle.

@@ -102,7 +102,7 @@ MJ_TEST(Audio_TruncatedOrCorruptFlacIsRefused)
 	cut.resize(flac.size() * 6 / 10);
 	WriteAll(dir.Path() / "cut.flac", cut);
 	auto r = ConvertToCanonicalWav(dir.Path() / "cut.flac", dir.Path() / "o1.wav");
-	MJ_CHECK(!r.ok);
+	MJ_CHECK(!r.ok && r.sourceError);
 	MJ_CHECK_MSG(r.error.find("frames") != std::string::npos, r.error);
 
 	auto bad = flac;
@@ -125,11 +125,13 @@ MJ_TEST(Audio_TruncatedOrCorruptFlacIsRefused)
 MJ_TEST(Audio_FormatsTheSlotWasNotProvenWithAreRefused)
 {
 	auto r = ConvertToCanonicalWav(Fixture("mono_s24.flac"), {});
-	MJ_CHECK(!r.ok && r.fmt.bits == 24);
+	MJ_CHECK(!r.ok && r.fmt.bits == 24 && r.sourceError);
 	MJ_CHECK_MSG(r.error.find("24-bit") != std::string::npos, r.error);
 	std::string why;
-	MJ_CHECK(EnginePlayable({ 48000, 1, 16 }, why));
 	MJ_CHECK(EnginePlayable({ 44100, 2, 16 }, why));
+	// Strict until 48 kHz / mono are heard in the field (DESIGN 5).
+	MJ_CHECK(!EnginePlayable({ 48000, 2, 16 }, why));
+	MJ_CHECK(!EnginePlayable({ 44100, 1, 16 }, why));
 	MJ_CHECK(!EnginePlayable({ 22050, 2, 16 }, why));
 	MJ_CHECK(!EnginePlayable({ 44100, 6, 16 }, why));
 	MJ_CHECK(!EnginePlayable({ 44100, 2, 8 }, why));
@@ -159,5 +161,8 @@ MJ_TEST(Audio_StopTokenCancels)
 	std::stop_source   ss;
 	ss.request_stop();
 	const auto r = ConvertToCanonicalWav(Fixture("golden_s16.flac"), dir.Path() / "x.wav", ss.get_token());
-	MJ_CHECK(!r.ok && r.error == "cancelled");
+	MJ_CHECK(!r.ok && r.error == "cancelled" && !r.sourceError);  // a cancel never blames the file
+	// An output that cannot be created is a destination failure, not a bad source.
+	const auto d = ConvertToCanonicalWav(Fixture("golden_s16.flac"), dir.Path() / "no_such_dir" / "x.wav");
+	MJ_CHECK(!d.ok && !d.sourceError);
 }

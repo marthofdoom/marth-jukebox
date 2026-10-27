@@ -12,8 +12,11 @@ namespace MJ::App {
     // loads the INI). No network or file IO on the game thread.
     void OnDataLoaded();
 
-    // SKSE messages after load (kPostLoadGame, kNewGame): state log only.
+    // SKSE messages after load (kPostLoadGame, kNewGame): state log + the retarget entry check (read-only).
     void OnGameLoaded(const char* a_why);
+
+    // Game thread, from the 250 ms watcher task: shows a queued in-game notification (RE::DebugNotification).
+    void TickGameThread();
 
     // The process-lifetime settings store (never null after Init). For MJ::Menu::SetStore at integration.
     mj::config::SettingsStore* Store();
