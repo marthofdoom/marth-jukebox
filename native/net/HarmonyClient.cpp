@@ -1303,6 +1303,18 @@ namespace MJ::Net {
         return impl_->DoSearch(a_query, a_kinds, a_limit, a_st);
     }
 
+    FailureClass ClassifyFailure(Error a_err) {
+        switch (a_err) {
+        case Error::kOk:          return FailureClass::kNone;
+        case Error::kUnreachable:
+        case Error::kTimeout:
+        case Error::kDisabled:    return FailureClass::kNetwork;
+        case Error::kBadKey:      return FailureClass::kAuth;
+        case Error::kCancelled:   return FailureClass::kCancelled;
+        default:                  return FailureClass::kOther;
+        }
+    }
+
     BrowseResult HarmonyClient::LibraryView(std::string_view a_view, int a_limit, std::stop_token a_st) {
         if (a_view != "genres" && a_view != "artists") {
             BrowseResult r;

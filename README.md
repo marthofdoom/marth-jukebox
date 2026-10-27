@@ -15,7 +15,8 @@ Security note: the personal key is sent with every request. Use an `https://` se
 - When the Harmony server cannot be reached while music plays from it, a notification appears top-left
   ("Jukebox: Harmony server not reachable - playing saved/vanilla music"), again every 5 minutes, and once
   "Jukebox: Harmony is back". `[General] ToastEnabled=0` switches it off, `ToastIntervalMinutes` (1-60) sets the
-  interval. To see it: enter a wrong server address in the menu, or stop the server.
+  interval. To see it: enter a well-formed but unreachable server address in the menu (for example the right host
+  with a wrong port), or stop the server. A malformed address gives no notification (the menu says what is wrong).
 
 ## Credits
 

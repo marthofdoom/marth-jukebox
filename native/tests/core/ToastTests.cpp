@@ -72,6 +72,21 @@ MJ_TEST(Toast_DisabledInactiveOrUnconfiguredIsSilent)
 	MJ_CHECK(!none.OnNetworkFailure(0) && !none.OnNetworkFailure(1) && !none.OnAuthFailure(2));
 }
 
+// Review R2-2: cancels (settings change, kill switch, a cancelled profile PUT) never count toward an outage.
+MJ_TEST(Toast_CancelIsNotAFailure)
+{
+	auto p = Make();
+	MJ_CHECK(!p.OnOutcome(ToastPolicy::Outcome::NetworkFailure, 0));
+	MJ_CHECK(!p.OnOutcome(ToastPolicy::Outcome::Cancelled, 1'000));
+	MJ_CHECK(!p.OnOutcome(ToastPolicy::Outcome::Cancelled, 2'000));
+	MJ_CHECK(!p.OnOutcome(ToastPolicy::Outcome::Other, 3'000));
+	MJ_CHECK(!p.Tick(19'000));  // still one failure: a blip
+	MJ_CHECK(p.OnOutcome(ToastPolicy::Outcome::NetworkFailure, 4'000));  // the second REAL failure confirms
+	auto q = Make();
+	for (int i = 0; i < 10; ++i) MJ_CHECK(!q.OnOutcome(ToastPolicy::Outcome::Cancelled, i * 30'000));
+	MJ_CHECK(!q.Down());
+}
+
 MJ_TEST(Toast_AuthOncePerSettingsChange)
 {
 	auto p = Make();

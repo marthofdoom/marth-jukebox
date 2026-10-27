@@ -419,6 +419,17 @@ namespace {
         CHECK_ERR(cl.Next("p", "explore", "library", 3, false, "flac"), Error::kBadRequest);  // what an old server does
     }
 
+    // Review R2-2: a cancel is never a network failure (no back-off, no toast count).
+    void T_ClassifyFailure() {
+        CHECK(ClassifyFailure(Error::kCancelled) == FailureClass::kCancelled);
+        CHECK(ClassifyFailure(Error::kUnreachable) == FailureClass::kNetwork);
+        CHECK(ClassifyFailure(Error::kTimeout) == FailureClass::kNetwork);
+        CHECK(ClassifyFailure(Error::kDisabled) == FailureClass::kNetwork);
+        CHECK(ClassifyFailure(Error::kBadKey) == FailureClass::kAuth);
+        CHECK(ClassifyFailure(Error::kOk) == FailureClass::kNone);
+        CHECK(ClassifyFailure(Error::kBadRequest) == FailureClass::kOther);
+    }
+
     void T_Next() {
         Server s([](const Req&, Conn& c, int) {
             c.Send(Resp(200, "OK", R"({"profile":"skyrim","type":"default","requested_type":"explore","sources":"library",
@@ -1330,6 +1341,7 @@ int main() {
         { "search", T_Search },
         { "status_services", T_StatusServices },
         { "browse", T_Browse },
+        { "classify_failure", T_ClassifyFailure },
         { "next_old_server_rejects_unknown_keys", T_NextOldServerRejectsUnknownKeys },
         { "download_wav_ok", T_DownloadWavOk },
         { "download_replace_and_preserve", T_DownloadReplacesAndPreserves },

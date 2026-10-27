@@ -7,8 +7,11 @@
 //  - Down: after 2 consecutive network failures, or failures for >= 20 s (a single blip stays silent), while at
 //    least one environment is active: one toast, then again every `intervalMs` while it stays down.
 //  - Back: exactly one toast when a request succeeds after a down toast was shown.
-//  - Auth/config errors (bad key, game source disabled, invalid address): one toast per settings change.
-//  - Disabled or no server configured: never a toast.
+//  - A refused key (401): "Harmony rejected the key", once per settings change.
+//  - The game source switched off on the server (403 / status enabled=false) counts as NOT REACHABLE (the repeating
+//    toast). A malformed server address gives no toast (the menu shows it; nothing is ever sent).
+//  - Our own cancel (settings change, kill switch, shutdown) is not a failure: OnOutcome(kCancelled) does nothing.
+//  - ToastEnabled=0 or no server configured: never a toast.
 
 #include <optional>
 #include <string>
@@ -34,6 +37,10 @@ namespace mj::pool
 
 		// Whether at least one environment is active (bound or planned to play from Harmony).
 		void SetActive(bool active) { active_ = active; }
+
+		enum class Outcome { Success, NetworkFailure, AuthFailure, Cancelled, Other };
+		// One entry point for any request result: Cancelled and Other change nothing.
+		std::optional<std::string> OnOutcome(Outcome o, long long nowMs);
 
 		std::optional<std::string> OnSuccess(long long nowMs);
 		std::optional<std::string> OnNetworkFailure(long long nowMs);  // unreachable, timeout, refused, bad status

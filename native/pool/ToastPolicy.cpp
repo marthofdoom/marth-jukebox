@@ -19,6 +19,16 @@ namespace mj::pool
 		}
 	}
 
+	std::optional<std::string> ToastPolicy::OnOutcome(Outcome o, long long nowMs)
+	{
+		switch (o) {
+		case Outcome::Success:        return OnSuccess(nowMs);
+		case Outcome::NetworkFailure: return OnNetworkFailure(nowMs);
+		case Outcome::AuthFailure:    return OnAuthFailure(nowMs);
+		default:                      return std::nullopt;  // a cancel or a per-request problem is not an outage
+		}
+	}
+
 	std::optional<std::string> ToastPolicy::OnSuccess(long long)
 	{
 		const bool wasAnnounced = announced_;

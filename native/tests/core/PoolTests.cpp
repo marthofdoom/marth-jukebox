@@ -189,8 +189,18 @@ MJ_TEST(Pool_AcceptablePicksFiltersRepeats)
 	AddRecent(idx, "explore", "local:a");
 	const auto rep = AcceptablePicks(idx, "explore", { { "local", "a" }, { "local", "b" }, { "local", "played" } }, 1);
 	MJ_CHECK(rep.repeats && rep.picks.size() == 1 && rep.picks[0] == 2);  // "played" is the oldest in the list
+	// A non-empty pool (one track waiting):
+	idx.pools["explore"].entries = { Entry("local", "head", 1) };
+	// "a" is the track that just played (newest): with a non-empty pool it is never queued again right away.
 	const auto rep2 = AcceptablePicks(idx, "explore", { { "local", "a" }, { "local", "b" } }, 2);
-	MJ_CHECK(rep2.repeats && rep2.picks.size() == 2 && rep2.picks[0] == 1 && rep2.picks[1] == 0);
+	MJ_CHECK(rep2.repeats && rep2.picks.size() == 1 && rep2.picks[0] == 1);
+	const auto only = AcceptablePicks(idx, "explore", { { "local", "a" } }, 1);
+	MJ_CHECK(only.picks.empty() && !only.repeats);
+	// With an empty pool the just-played track may come back (the pool would otherwise stay empty).
+	idx.pools["explore"].entries.clear();
+	const auto empty = AcceptablePicks(idx, "explore", { { "local", "a" } }, 1);
+	MJ_CHECK(empty.repeats && empty.picks.size() == 1);
+	idx.pools["explore"].entries = { Entry("local", "inpool", 1) };
 	MJ_CHECK(RemoveEntry(idx, "explore", "local:inpool") && idx.pools["explore"].entries.empty());
 	MJ_CHECK(!RemoveEntry(idx, "explore", "local:inpool") && !RemoveEntry(idx, "nope", "local:x"));
 }

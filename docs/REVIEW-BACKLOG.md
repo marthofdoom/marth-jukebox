@@ -53,23 +53,39 @@ Note: the `core-settings` branch also edits this file; merge both sections.
 - **SEV-5** An `http://` base sends the key in clear text (documented: README / NEXUS-COMPLIANCE recommend
   `https://` off-LAN).
 
-## core-playback, raised against b3564bd (two Opus 5.5 reviews, A and B; deferred by the coordinator, not fixed)
+## core-playback, raised against b3564bd and e5bdb99 (Opus 5.5 reviews A and B, two rounds)
 
-Note: the reviewers' full reports were not on disk for the author; the wording below is taken from reviewer A's log
-and the coordinator's fix-round message, and marked where it is a summary.
+Reviewer A's wording is pasted from its log (`core-review-a.md`); that log names most findings in one line, so the text
+below is exactly that line's wording, nothing added. Status: FIXED = in e5bdb99 (fix round 1) or in the round-2 commit.
 
-- **SEV-4 A-F5** (review A log: "F5/F6 SEV-4 event attribution"): play-event attribution, part 1. A play event is
-  attributed to the slot's current owner environment; an event that races a plan change can be credited to the wrong
-  environment (summary).
-- **SEV-4 A-F6** (same log line): play-event attribution, part 2 (summary; see reviewer A's report).
-- **SEV-4 A-F9** (review A log: "F9 plan/bound race"): the slot thread reads `bound` and the plan under the lock, but the
-  game thread publishes `bound` after its writes of the same tick, so for up to one tick a slot write can be decided on a
-  stale binding (summary).
-- **SEV-5 A-F12** (review A log: "F10-12 SEV-5"): minor, see reviewer A's report (not itemised in the log).
-- **SEV-5 A-F13** (review A log: "F13 harmony:8080 in DESIGN (pre-existing)"): the host name. FIXED in this round as
-  coordinator item A-F11 (DESIGN, ROADMAP and the tests no longer name the server); kept here for the record.
-- **SEV-4 A-F14** (review A log: "F14 no post-load entry check"): FIXED in this round as coordinator item A-F10
-  (OnGameLoaded counts our entries per bound type and re-asserts on a mismatch); kept here for the record.
+Reviewer A, round 1 (b3564bd), log line: "F1 SEV-2 Windows retry thrash; F2 SEV-3 dry pool loops last track while type
+current (test doc wrong); F3 SEV-3 kill switch latency blocked by downloads; F4 SEV-3 bad pooled head wedges env; F5/F6
+SEV-4 event attribution; F7 startup rewrite; F8 48k claim; F9 plan/bound race; F10-12 SEV-5; F13 harmony host name in DESIGN
+(pre-existing); F14 no post-load entry check." (the host name itself is not repeated here)
+- **A-F1 SEV-2** "Windows retry thrash": FIXED e5bdb99.
+- **A-F2 SEV-3** "dry pool loops last track while type current (test doc wrong)": FIXED e5bdb99.
+- **A-F3 SEV-3** "kill switch latency blocked by downloads": FIXED e5bdb99.
+- **A-F4 SEV-3** "bad pooled head wedges env": FIXED e5bdb99.
+- **A-F5 SEV-4** "event attribution" (with F6): BACKLOG.
+- **A-F6 SEV-4** "event attribution" (with F5): BACKLOG.
+- **A-F7** "startup rewrite": FIXED e5bdb99 (round 2 log: "F7 fixed (manifest v2 known slots; v1 read; 2 sizes -> rewrite)").
+- **A-F8** "48k claim": FIXED e5bdb99 ("F8 fixed (44.1k stereo only)").
+- **A-F9** "plan/bound race": BACKLOG.
+- **A-F10 SEV-5** (one of "F10-12 SEV-5"): FIXED e5bdb99 ("F10 fixed (LogState count; appliedSize=0 -> reassert at safe tick)").
+- **A-F11 SEV-5** (one of "F10-12 SEV-5"): FIXED e5bdb99 ("F11 fixed").
+- **A-F12 SEV-5** (one of "F10-12 SEV-5"; not itemised in the log): BACKLOG.
+- **A-F13** "the server host name in DESIGN (pre-existing)": FIXED e5bdb99 (DESIGN, ROADMAP and tests no longer name the server).
+- **A-F14** "no post-load entry check": FIXED e5bdb99 (the post-load entry count, reviewer A's round-2 "F10 fixed" line).
+
+Reviewer A, round 2 (e5bdb99), verbatim:
+- **R2-1 SEV-3** "DebugNotification is a new engine call, unproven in field (ToastEnabled=0 is its kill switch)":
+  documented in DESIGN 3 item 4 as the one new engine call of 1.0; proven only when the toast shows in game.
+- **R2-2 SEV-4** "cancelled profile PUT -> NetFailure (backoff + toast failure count) PoolWorker.cpp:461": FIXED in the
+  round-2 commit (early return on kCancelled; `ClassifyFailure` / `ToastPolicy::OnOutcome` tests).
+- **R2-3 SEV-5** "replay never prepared if refresh fires while not current (one repeat)": BACKLOG.
+- **R2-4 SEV-5** "permanent ACCESS_DENIED re-decodes every ~2 min": BACKLOG.
+
+Reviewer B, round 1 (b3564bd), deferred:
 - **SEV-4 B** cache overshoot and pooledBytes double count: the cap check counts pooled bytes per pool, a file pooled in
   two environments counts twice, and a download can push the cache above `CacheCapMB` until the next eviction.
 - **SEV-4 B** genre mode needs a library: genres come from the live library only, so a streaming-only user cannot pick
@@ -81,11 +97,14 @@ and the coordinator's fix-round message, and marked where it is a summary.
 - **SEV-5 B** bad key vs bad address message (App.cpp:67 / PoolWorker.cpp:323): an invalid address and a refused key can
   read alike in the menu.
 
-### In-game checklist from review A (10 items) -> docs/INTEGRATION-TEST.md
+Reviewer B, round 2 (e5bdb99), from its log:
+- **SEV-4 B** "REVIEW-BACKLOG.md:69 re-adds the host name": FIXED in the round-2 commit.
+- **SEV-4 B** "N<=poolSize -> all picks pooled -> eligible empty -> 20 s next poll forever, no notice": FIXED in the
+  round-2 commit (the environment waits for its next play event or a settings change; "Small selection" notice; a
+  plain-language problem after repeated rejected picks).
+- **SEV-4 B** "fallback can re-pool the just-played track (back-to-back repeat) when it is the only eligible pick while
+  pool still non-empty": FIXED in the round-2 commit (test in `Pool_AcceptablePicksFiltersRepeats`).
+- **SEV-5 B** "backlog A items are guesses/misnumbered": FIXED (this section). "INTEGRATION-TEST 10.2 vs repeats", "ToastPolicy.h
+  comment (disabled/invalid address)", "replay nowPlaying shows raw key": FIXED in the round-2 commit.
 
-The checklist itself was not in reviewer A's log; the integration test covers, after this round: first run without a
-server (§1), the profile/plan/prefill log lines (§2), play events and refills (§3), resume after combat (§4),
-diegetic types untouched (§5), Harmony away incl. the replay rotation and the notifications (§6), settings changes
-incl. pool drops and no_tracks (§7), the kill switch timing (§8), save/load with the post-load entry check (§9),
-restart with known slot contents and no rewrite (§10). Coordinator: map reviewer A's 10 items onto these before the
-test cycle.
+Reviewer A's in-game checklist (round 2, 9 items) is docs/INTEGRATION-TEST.md "Reviewer checklist".

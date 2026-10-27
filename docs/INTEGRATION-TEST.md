@@ -1,4 +1,4 @@
-# 1.0 integration test (LoreRim, one cycle with marth)
+# 1.0 integration test (LoreRim, one test cycle)
 
 Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu has its own checks). About
 60-90 minutes. Everything the plugin does is in `MarthJukebox.log` (SKSE log folder); keep it after each step.
@@ -20,8 +20,8 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
 ## 2. Configure (menu or INI) (acceptance 3)
 1. Set ServerUrl + PersonalKey, and: `explore` = Genre (a genre the library really has; the picker lists them),
    `combat` = Query `epic battle music orchestral` with streaming ON, `dungeon` = Artist from the library.
-   Note: marth's library is small, so the presets and these examples assume YouTube Music streaming for most
-   environments; a library-only selection with few tracks shows "Small selection: tracks will repeat".
+   Note: the presets and these examples assume YouTube Music streaming for most environments (a small library
+   cannot fill them); a library-only selection with few tracks shows "Small selection: tracks will repeat".
    PoolSize 3. Apply (menu) or restart (INI).
 2. Expect: `[net] Connected. Sources: ...`, `[profile] published 3 environment type(s)`, `[plan] #n: engine writes on;
    3 environment(s), N music type(s) mapped to slots`, then `[pool] explore: + Artist - Title (... flac ...)` lines,
@@ -89,7 +89,33 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
 1. Play on for the rest of the 2 hours. Quit. Restart and load: expect `[pool] index loaded: k pool(s), n validated
    track(s), 0 dropped`, `[slots] slot manifest: ... with a known track` and NO `slot NN (...) <-` rewrite for slots that
    still hold an unplayed pool track; immediate Harmony music before any new download.
-2. Count repeats in the log for one environment (same title in two PLAY lines): expect none within 50 plays.
+2. Count repeats in the log for one environment with a BROAD streaming selection, outside the Harmony-down test of §6
+   (same title in two PLAY lines): expect none within 50 plays. A small selection repeats by design (its menu line says so).
+
+## Reviewer checklist (in this order; each one is a yes/no with the log kept)
+1. **Resume after a fight, with a new song already waiting.** Let an exploration song play for a minute (the plugin
+   has already swapped the NEXT song into the file by then), start a fight, finish it. Does the exploration song you
+   were hearing continue where it stopped, and NOT jump to the new song or start over?
+2. **One slot shared by several regions.** With `explore` set (no region-specific settings), walk from tundra into a pine
+   forest and a marsh. Every region plays Harmony music from the same exploration list, and the log shows one slot for
+   all of them.
+3. **The "Harmony not reachable" notification.** (a) Set a server address that is well-formed but wrong (e.g. the right
+   host with a wrong port): after about 20 s a notification top-left, again every 5 minutes. (b) A wrong key: "Harmony
+   rejected the key", once. (c) `ToastEnabled=0` in the INI: no notification at all. (d) None appears over the main
+   menu or a loading screen (it waits until they are gone).
+4. **Kill switch during a download.** While the log shows a download in progress (`[pool] ... +` lines still coming),
+   create the `MarthJukebox.noretarget` file: within about 2 s the log says the kill switch appeared, the download stops,
+   and the music goes back to vanilla when the current song ends.
+5. **Harmony stops while music plays.** Stop the server during exploration and keep playing through several song
+   changes: you hear earlier Harmony songs of that environment again (not the same song over and over); when that
+   music stops, vanilla music takes over. Start the server again: one "Harmony is back" notification.
+6. **Save, load, new game.** Save, load the save, and start a new game from the main menu: music keeps working each
+   time and the log shows no "re-asserting" error.
+7. **Restart without rewriting.** Quit and start the game again: the log shows the slot files were recognised and NOT
+   written again at start; Harmony music plays right away.
+8. **Quit cleanly.** Quit to desktop (from the main menu and from a save): the game closes without hanging.
+9. **Windows note.** This whole test runs under Proton. On native Windows the file swap may be refused while a song
+   plays; the log then says the rename is retried when that slot is quiet. Report it if you test on Windows.
 
 ## Evidence to hand back
 `MarthJukebox.log` of every session, `MarthJukebox.ini` (REMOVE the PersonalKey line first), DLL sha256, the list of

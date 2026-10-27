@@ -21,6 +21,7 @@ namespace MJ::Pool::detail {
         std::string problem;            // plain language for the menu ("" = none); cleared when a track arrives
         std::string streamingNotice;    // set by every Replan from the plan (streaming not possible on this server)
         bool        smallSelection = false;  // the last refill could only offer recently played tracks
+        bool        waitForPlay = false;     // nothing new to ask for until the next play event / settings change
         long long   backoffUntilMs = 0; // SteadyMs(): no `next` for this environment before then
         int         failures = 0;
         std::string nowPlaying;
@@ -83,6 +84,7 @@ namespace MJ::Pool::detail {
         bool                        replanWanted = false;  // the kill-switch file changed (slot thread poll)
         std::stop_source            jobStop;            // the pool thread's current network job (A-F3)
         std::deque<std::string>     toasts;             // in-game notifications for the game thread
+        std::map<std::string, std::string> playedTitles; // "service:id" -> "Artist - Title" of served tracks (replay lines)
         bool                        clearCacheRequested = false;
         PlayedFn                    played;
 

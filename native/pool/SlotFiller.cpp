@@ -71,13 +71,17 @@ namespace MJ::Pool::detail {
                 sl.fresh      = false;
                 sl.servedAtMs = e.ms;
                 s.envs[e.env].nowPlaying = display;
+                s.envs[e.env].waitForPlay = false;  // a small selection may offer something again
+                if (s.playedTitles.size() < 4096) s.playedTitles[key] = display;
                 MarkDirtyLocked();  // also wakes the pool thread: refill the played track
                 spdlog::info("[slots] slot {:02} ({}) PLAY handle=0x{:08X} idx={}: now playing {}", e.slot, e.env, e.handle, e.idx, display);
             } else if (sl.owner == e.env && sl.replay) {
                 std::tie(service, id) = SplitKey(sl.contentKey);
                 mj::pool::AddRecent(s.index, e.env, sl.contentKey);  // rotates it to the newest end
                 sl.servedAtMs = e.ms;
-                s.envs[e.env].nowPlaying = "(replay while Harmony refills) " + sl.contentKey;
+                const auto t = s.playedTitles.find(sl.contentKey);
+                s.envs[e.env].nowPlaying = "(replay while Harmony refills) " + (t != s.playedTitles.end() ? t->second : std::string("an earlier track"));
+                s.envs[e.env].waitForPlay = false;
                 MarkDirtyLocked();
                 spdlog::warn("[slots] slot {:02} ({}) PLAY handle=0x{:08X} idx={}: pool was dry, replaying recently played {}", e.slot,
                              e.env, e.handle, e.idx, sl.contentKey);

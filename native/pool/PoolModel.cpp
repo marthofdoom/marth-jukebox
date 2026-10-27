@@ -317,8 +317,16 @@ namespace mj::pool
 		if (!out.picks.empty() || eligible.empty()) {
 			return out;
 		}
-		// Only repeats came back: least recently played first.
+		// Only repeats came back: least recently played first. The track that JUST played (newest in the list) is never
+		// queued behind a non-empty pool: it would come straight back (review B r2). With an empty pool it may.
 		std::stable_sort(eligible.begin(), eligible.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+		if (!taken.empty() && recent && !recent->empty()) {
+			const long long newest = static_cast<long long>(recent->size()) - 1;
+			const std::size_t poolCount = index.pools.contains(envId) ? index.pools.find(envId)->second.entries.size() : 0;
+			if (poolCount > 0) {
+				std::erase_if(eligible, [newest](const auto& e) { return e.second == newest; });
+			}
+		}
 		for (const auto& [i, pos] : eligible) {
 			if (out.picks.size() >= want) {
 				break;

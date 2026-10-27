@@ -336,6 +336,7 @@ namespace MJ::Pool {
                 for (auto& [id, es] : s.envs) {
                     es.problem.clear();
                     es.smallSelection = false;
+                    es.waitForPlay    = false;
                     es.backoffUntilMs = 0;
                     es.failures       = 0;
                 }
@@ -383,6 +384,7 @@ namespace MJ::Pool {
         }
 
         void NetFailure(NetState& ns, const Net::Result& r, const char* a_what) {
+            if (Net::ClassifyFailure(r.error) == Net::FailureClass::kCancelled) return;  // our own cancel: not an outage
             ns.connected    = false;
             const long long now = SteadyMs();
             ns.nextConnectMs = now + ns.connBackoffMs;
@@ -457,6 +459,8 @@ namespace MJ::Pool {
                     SetConn(true, false, "Harmony rejected the music settings: " + r.message, &ns);
                     Replan(ns);
                     return false;
+                } else if (r.error == Net::Error::kCancelled) {
+                    return false;  // settings changed / kill switch / shutdown: retried by the next loop, no back-off (R2-2)
                 } else {
                     NetFailure(ns, r, "profile PUT");
                     return false;
@@ -529,6 +533,7 @@ namespace MJ::Pool {
                 int             best = INT32_MIN;
                 for (const auto& [id, ep] : plan->envs) {
                     if (ep.slot < 0) continue;
+                    if (const auto e = s.envs.find(id); e != s.envs.end() && e->second.waitForPlay) continue;  // small selection
                     const auto pit = s.index.pools.find(id);
                     const int  n   = pit == s.index.pools.end() ? 0 : static_cast<int>(pit->second.entries.size());
                     if (n >= ep.poolSize) continue;
@@ -620,6 +625,24 @@ namespace MJ::Pool {
                                  "recently played", ep.id, nr.poolSize);
             }
             const auto& ok = choice.picks;
+            if (ok.empty()) {
+                // Everything the server offered is already pooled (or just failed): a selection no bigger than the pool.
+                // Do not poll `next` every 20 s: wait for the next play event (or a settings change) (review B r2).
+                std::scoped_lock lk(s.mx);
+                std::set<std::string> pooled;
+                if (const auto pit = s.index.pools.find(ep.id); pit != s.index.pools.end())
+                    for (const auto& e : pit->second.entries) pooled.insert(e.Key());
+                bool allPooled = !pairs.empty();
+                for (const auto& [svc, id] : pairs) allPooled &= pooled.contains(mj::pool::TrackKey(svc, id));
+                if (allPooled || (nr.poolSize > 0 && nr.poolSize <= static_cast<std::int64_t>(pooled.size()))) {
+                    auto& es          = s.envs[ep.id];
+                    es.smallSelection = true;
+                    es.waitForPlay    = true;
+                    spdlog::info("[pool] {}: the selection offers no track beyond the {} pooled (server pool {}); waiting for the next "
+                                 "play before asking again", ep.id, pooled.size(), nr.poolSize);
+                    return true;
+                }
+            }
             if (ok.size() < pairs.size())
                 spdlog::info("[pool] {}: {} of {} pick(s) skipped (recently played, already pooled, just failed or duplicate)", ep.id,
                              pairs.size() - ok.size(), pairs.size());
@@ -710,7 +733,16 @@ namespace MJ::Pool {
                 spdlog::info("[pool] {}: + {} ({} s, {:.1f} MB {}, {} ms)", ep.id, e.Display(), t.durationS, e.bytes / 1048576.0, cont,
                              std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
             }
-            if (added == 0 && !ok.empty()) EnvBackoff(ep.id, 15'000, "");
+            if (added == 0 && !ok.empty()) {
+                bool repeated = false;
+                {
+                    std::scoped_lock lk(s.mx);
+                    repeated = s.envs[ep.id].failures >= 2;  // this makes 3 rounds in a row
+                }
+                // Never a silent "Filling pool": say why after a few rounds of rejected picks.
+                EnvBackoff(ep.id, 15'000, repeated ? "Harmony's tracks for this selection keep failing to download or check (see "
+                                                     "MarthJukebox.log); retrying" : "");
+            }
             if (ok.empty()) EnvBackoff(ep.id, 20'000, "");  // nothing usable came back: let the server's bag move on
             EnforceCap(S().capBytes, "cache cap");
             return true;

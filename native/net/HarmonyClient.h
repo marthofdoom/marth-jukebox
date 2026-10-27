@@ -69,6 +69,12 @@ namespace MJ::Net {
 
     const char* ErrorName(Error a_err);
 
+    // How a consumer should account an error: kNetwork = the server is away (back off, counts toward "Harmony not
+    // reachable"), kAuth = the server refused the key, kCancelled = our own cancel (NOT a failure: no back-off, no
+    // toast count), kOther = a per-request problem.
+    enum class FailureClass { kNone, kNetwork, kAuth, kCancelled, kOther };
+    FailureClass ClassifyFailure(Error a_err);
+
     struct Config {
         std::string baseUrl;     // http(s)://host[:port][/prefix]; nothing else is accepted
         std::string personalKey; // optional; sent as X-Harmony-Key, never logged

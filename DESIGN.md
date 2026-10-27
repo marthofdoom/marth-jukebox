@@ -77,6 +77,10 @@ modlist (Requiem, LoreRim...). Instead the plugin edits the winning in-memory MU
    then 60 s, and only while that slot is not the one playing; access-denied gives up after 3 tries, loudly).
    While at least one environment plays from Harmony and the server stays unreachable, an in-game notification says
    so (`[General] ToastEnabled`, every `ToastIntervalMinutes`, default 5; one "Harmony is back" on recovery).
+   **The one new engine call of 1.0** is that notification: `RE::DebugNotification` (`RELOCATION_ID(52050, 52933)`,
+   fork `include/RE/M/Misc.h`), called only from the 250 ms watcher task on the game thread, never over the main menu or
+   a loading screen. It is shipped by MFO but NOT yet field-proven in this plugin until the toast is seen in game; its
+   kill switch is `ToastEnabled=0`.
    Remember-place ON is the engine's own resume (M0b); OFF has no safe
    read-only mechanism yet, so 1.0 stores the setting and behaves as ON.
    Threads: game thread = probe + retarget only; pool thread = settings load, Harmony, pools, cache; slot thread
