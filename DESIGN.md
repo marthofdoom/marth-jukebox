@@ -56,9 +56,15 @@ modlist (Requiem, LoreRim...). Instead the plugin edits the winning in-memory MU
 4. **Never silence the game**: if Harmony is unreachable or the slot is not ready, restore the original
    `tracks` for that MUSC before its next play and log it loudly (a documented degrade, not a mask).
 5. **Network = WinHTTP** (no extra deps, works under Wine/Proton, https for free).
-6. **Settings UI**: MCM Helper / INI for v1 (server URL, key, per-category source). A profile is pushed
-   to Harmony with `PUT` from the plugin's defaults; a genre/artist picker needs the server's
-   `/api/search` (not yet documented) — likely a v2 in-game menu, or v1 = pick in Harmony's own UI.
+6. **Settings UI (marth 2026-10-27: an SKSE menu)**: an ImGui page registered with the SKSE Menu
+   Framework (Nexus SSE; a shared window that mods register pages with; hard requirement, to be
+   verified for 1.5.97/1.6.1170 and its API license before adoption), not MCM, because MCM has no text
+   fields or dynamic search lists. Page: server URL, key (masked), test-connection button, per category a
+   source picker (Vanilla / Genre / Artist / Playlist / Query) with a search box backed by `/api/search`,
+   sources `library`/`all` (default `library`, see docs/NEXUS-COMPLIANCE.md), cache cap, pool status.
+   Settings persist to an INI in `Data/SKSE/Plugins/`; the plugin `PUT`s the resulting profile to
+   Harmony. Fallback if the framework proves unsuitable: own ImGui overlay as in MFO's Board (more
+   code, duplicate-hook risk with other ImGui mods).
 
 ## 4. Category grouping (50 vanilla MUSC -> ~12 player-facing types)
 
