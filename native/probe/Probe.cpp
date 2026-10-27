@@ -148,12 +148,11 @@ namespace MJ::Probe {
                         spdlog::info("[probe]   track[{}] = null", i);
                         continue;
                     }
-                    const auto t = static_cast<std::uint32_t>(tr->GetType());
-                    spdlog::info("[probe]   track[{}] {:p} GetType=0x{:08X}({}) status={}", i, static_cast<const void*>(tr), t,
-                                 TrackTypeName(t), StatusName(tr->trackStatus.underlying()));
-
                     // BSIMusicTrack* -> wrapper. Resolved by identity (primary), cross-checked
                     // with skyrim_cast (RTDynamicCast) so a bad cast would show up as a mismatch.
+                    // The wrapper's own BSIMusicTrack vfuncs forward through w->track with no null
+                    // check, and the engine never updates the wrapper's own trackStatus, so
+                    // nothing virtual is called on `tr`; type and status are read from w->track.
                     RE::BGSMusicTrackFormWrapper* w = nullptr;
                     if (const auto it = g_trackByIface.find(tr); it != g_trackByIface.end()) w = it->second;
                     auto* viaCast = skyrim_cast<RE::BGSMusicTrackFormWrapper*>(tr);
@@ -164,24 +163,26 @@ namespace MJ::Probe {
                     }
                     if (!w) {
                         ++a_t.nonWrapper;
-                        spdlog::info("[probe]   track[{}] is NOT a known MUST wrapper", i);
+                        spdlog::info("[probe]   track[{}] {:p} is NOT a known MUST wrapper", i, static_cast<const void*>(tr));
                         continue;
                     }
                     ++a_t.wrappers;
-                    spdlog::info("[probe]   track[{}] wrapper {:08X} [{}] edid=\"{}\" (wrapper {:p}, iface offset {})", i,
+                    spdlog::info("[probe]   track[{}] wrapper {:08X} [{}] edid=\"{}\" (wrapper {:p}, iface offset {}) wrapperStatus={}", i,
                                  w->GetFormID(), PluginOf(w), EdidOf(w), static_cast<const void*>(w),
-                                 reinterpret_cast<const char*>(tr) - reinterpret_cast<const char*>(w));
-                    bool single = false;
-                    LogInnerTrack("    ", w->track, single);
+                                 reinterpret_cast<const char*>(tr) - reinterpret_cast<const char*>(w),
+                                 StatusName(tr->trackStatus.underlying()));
                     if (!w->track) {
                         ++a_t.nullInner;
-                    } else {
-                        switch (w->track->GetType()) {
-                        case RE::BSIMusicTrack::TrackType::kSingleTrack: ++a_t.single; break;
-                        case RE::BSIMusicTrack::TrackType::kPalette:     ++a_t.palette; break;
-                        case RE::BSIMusicTrack::TrackType::kSilentTrack: ++a_t.silent; break;
-                        default:                                         ++a_t.other; break;
-                        }
+                        spdlog::info("[probe]   track[{}] wrapper has NO inner track; skipped", i);
+                        continue;
+                    }
+                    bool single = false;
+                    LogInnerTrack("    ", w->track, single);
+                    switch (w->track->GetType()) {
+                    case RE::BSIMusicTrack::TrackType::kSingleTrack: ++a_t.single; break;
+                    case RE::BSIMusicTrack::TrackType::kPalette:     ++a_t.palette; break;
+                    case RE::BSIMusicTrack::TrackType::kSilentTrack: ++a_t.silent; break;
+                    default:                                         ++a_t.other; break;
                     }
                 }
             }
@@ -231,7 +232,8 @@ namespace MJ::Probe {
             std::uint32_t              index{ 0 };
             std::uint32_t              ntracks{ 0 };
             const RE::BSIMusicTrack*   track{ nullptr };
-            std::uint32_t              trackStatus{ 0 };
+            std::uint32_t              trackStatus{ 0 };    // INNER track's status (wrapper's own is never updated)
+            std::uint32_t              wrapperStatus{ 0 };  // wrapper's own field, logged to prove that claim
             std::vector<const RE::BSIMusicType*> queue;
             bool operator==(const State&) const = default;
         };
@@ -253,13 +255,19 @@ namespace MJ::Probe {
                 s.haveMgr = true;
                 s.current = mgr->current;
                 for (std::uint32_t i = 0; i < mgr->musicQueue.size() && i < 8; ++i) s.queue.push_back(mgr->musicQueue[i]);
-                if (s.current) {
+                // Read through `current` only if it is a music type we enumerated.
+                if (s.current && g_typeByIface.contains(s.current)) {
                     s.typeStatus = s.current->typeStatus.underlying();
                     s.index      = s.current->currentTrackIndex;
                     s.ntracks    = s.current->tracks.size();
                     if (s.index < s.ntracks) {
                         s.track = s.current->tracks[s.index];
-                        if (s.track) s.trackStatus = s.track->trackStatus.underlying();
+                        if (s.track) {
+                            if (const auto it = g_trackByIface.find(s.track); it != g_trackByIface.end()) {
+                                s.wrapperStatus = s.track->trackStatus.underlying();
+                                if (it->second->track) s.trackStatus = it->second->track->trackStatus.underlying();
+                            }
+                        }
                     }
                 }
             }
@@ -276,9 +284,9 @@ namespace MJ::Probe {
                 else
                     wrapper = std::format("<unknown {:p}>", static_cast<const void*>(s.track));
             }
-            spdlog::info("[probe] t=+{}ms music: mgr={} current={} typeStatus={} trackIndex={}/{} trackStatus={} wrapper={} queue=[{}]",
+            spdlog::info("[probe] t=+{}ms music: mgr={} current={} typeStatus={} trackIndex={}/{} trackStatus={} wrapperStatus={} wrapper={} queue=[{}]",
                          NowMs(), s.haveMgr ? "yes" : "NULL", TypeName(s.current), StatusName(s.typeStatus), s.index, s.ntracks,
-                         StatusName(s.trackStatus), wrapper, q);
+                         StatusName(s.trackStatus), StatusName(s.wrapperStatus), wrapper, q);
         }
 
         // One non-detached jthread, owned by a static guard whose destructor requests stop

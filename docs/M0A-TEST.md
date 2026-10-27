@@ -16,11 +16,10 @@ The log decides the design of M0b (the retarget).
    to `Data/SKSE/Plugins/`.
 2. ESP: copy `assets/MarthJukebox.esp` (from the repo or the branch) to `Data/`. Enable it in your load
    order. It is ESL-flagged (light), master Skyrim.esm; load order position does not matter.
-3. Test audio: create `Data/Music/Harmony/` and put a copy of the test WAV there **twice**, as
-   `explore_a.wav` and `explore_b.wav`. The test file is 44.1 kHz 16-bit stereo, 133 s:
-   `/tmp/claude-1000/-mnt-gaming-modlists-Projects-marth-jukebox/756ce713-6e58-47d3-bac7-fbc1600eb404/scratchpad/t.wav`
-   (do not commit audio; the repo ignores `*.wav`). The records only reference these files; the engine
-   does not open them in M0a, but the hashes in the log are those of these paths.
+3. Test audio: create `Data/Music/Harmony/` and copy any 44.1 kHz 16-bit stereo PCM WAV (about 2 minutes or
+   longer; marth supplies it) there **twice**, as `explore_a.wav` and `explore_b.wav`. Do not commit audio; the
+   repo ignores `*.wav`. The records only reference these files; the engine does not open them in M0a, but
+   the hashes in the log are those of these paths.
 
 ## In game
 
@@ -52,3 +51,12 @@ at roughly which time of day for any step that looked wrong.
 Lines to expect: `[startup]`, then a block of `[probe] MUSC ...` lines (one per music type with its
 tracks), `[probe] TOTALS ...`, `[probe] ---- our records ----`, then `[probe] t=+NNNNms music: ...` lines,
 one per state change. If `MarthJukebox.esp` is missing, the log says so clearly and the rest still works.
+
+## Reading the log
+
+- The engine does **not** keep MUST editor IDs. `edid=""` on every MUST line and a null
+  `LookupByEditorID` for `MJ_ExploreTundra_A/B` are EXPECTED and do not mean the ESP failed. The real
+  checks are the FormID lookups (`ours A` / `ours B` found) and the `trackID` hashes.
+- ANAM spelling in vanilla: of 258 MUST records in Skyrim.esm, 240 have an ANAM (all `.wav`); 210 use
+  `\Data\...` (leading backslash), 30 use `Data\...`, and 18 have none. Ours uses the `Data\...` form; the
+  log compares both vanilla spellings with ours.
