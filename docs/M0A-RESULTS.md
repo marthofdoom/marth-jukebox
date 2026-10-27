@@ -35,4 +35,10 @@ Log: `<prefix>/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition
 5. Event order seen: Combat `Playing -> Finishing`, then the previous type (Explore) is re-queued and resumes.
 
 ## Tuxborn (deck)
-Not collected yet: the deck was asleep (ssh timed out) when checked.
+Not tested (marth 2026-10-27). M0a is installed and enabled in the deck's Testing profile; backups are
+`*.bak-jukebox-20261027-105802` beside the profile files. Harmless to leave, or remove the mod folder and restore.
+
+## Target list (marth 2026-10-27)
+**LoreRim (ULLR) is the primary target**: it is the most complicated list for this mod (215 music types,
+tracks appended by other mods after load, bard/ambience mods). If it works there it works on lighter lists,
+and with no Nexus release other lists matter less. Deck/Tuxborn is a later portability check.
