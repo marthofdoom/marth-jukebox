@@ -112,3 +112,38 @@ into `default`.
   a green CI on your own SHA before reporting success. Registry: `marthofdoom/vcpkg-registry`.
 - Milestones: M0 spike (retarget one MUSC + one WAV slot, hardcoded file) -> M1 prefetch/slot loop ->
   M2 per-category profile + INI -> M3 fallback/restore + logging -> M4 in-game picker -> release.
+
+## 8. Additions (marth 2026-10-27, after M0a)
+
+**8.1 "Remember track place" toggle, per environment.** Off: an interrupted type (explore after combat)
+resumes with a fresh pick. On: it resumes the same track from where it stopped. M0a shows the engine already
+keeps `currentTrackIndex` per type and resumes it (Explore came back at 48/125 after combat); what it does
+with the PLAYBACK POSITION is unknown. `BGSMusicSingleTrack` has `lastKnownPlaybackPosition`, `nextCuePoint`
+and `loopsRemaining`; the M0b probe must log them across an interruption before we design this. If the engine
+cannot resume mid-track from our file, the fallback is to rewrite the idle slot as a WAV that starts at the
+saved offset (a 44-byte header plus the PCM tail, or a `Range` request to Harmony, which supports
+`44 + frame * channels * bits/8` seeking). Per-type state saved in the INI/state file: track id, byte offset.
+
+**8.2 The SKSE menu must be very easy to use** (marth: a first-class requirement, not a settings dump).
+Design target: a player who has never seen Harmony can finish setup in one sitting without typing more than
+the server address.
+- First run opens a short guided page: server URL, key, a **Test connection** button with a plain result
+  ("Connected, 12,431 tracks" / "wrong key" / "cannot reach server"), then straight to the category list.
+- Each environment (Explore, Combat, Town, Tavern, Dungeon, Boss, ...) is one row: name, a **source
+  picker** (Vanilla / Genre / Artist / Playlist), a **search box** with live results from `/api/search`,
+  the **streaming** and **remember place** checkboxes, and a **Preview** button.
+- Presets ("Calm ambient everywhere", "Epic orchestral combat"), a **Reset to vanilla** per row and
+  globally, and a status line per row showing the pool fill (2 of 3 ready).
+- Controller-friendly (the framework supports it; test on the deck), readable defaults, no jargon,
+  errors in sentences.
+
+**8.3 Compressed transfer (marth idea): lossless FLAC on the wire/disk, decoded to WAV at the slot.**
+Assessment: the 29 s cold time is the server (yt-dlp resolve + ffmpeg loudnorm), not the network (the 23 MB
+file is 0.6 s once cached), so compression does not fix cold latency on a LAN. It DOES help a remote/Tailnet
+server and, more usefully, the on-disk pool (about half the size, ~1.5 GB worst case becomes ~0.8 GB).
+Plan: a small Harmony change (`format=flac` on `/api/game/audio`, `flac -0/-1` speed, bit-exact), and in
+the plugin a public-domain single-header decoder (dr_flac; licence to be verified, MIT-0/public domain)
+that expands the chosen pool file into the engine slot on the worker thread (tens of ms), then the usual
+rename. The engine still sees a plain WAV. Lossless only: the sources are already lossy, so a lossy
+re-encode would degrade them twice. Milestone M3 (after the retarget works); needs a Harmony-repo change,
+which is separate scope.
