@@ -1,7 +1,10 @@
 // M0a read-only music probe. See Probe.h. Nothing here writes engine memory, takes
 // an engine lock, or installs a hook. Everything is logged at info with "[probe]".
+// M0b: the watcher task also runs Retarget::Tick (the only engine writer, in its own
+// file) after the probe's read-only Tick.
 #include "PCH.h"
 #include "probe/Probe.h"
+#include "retarget/Retarget.h"
 
 namespace MJ::Probe {
 
@@ -18,12 +21,8 @@ namespace MJ::Probe {
         constexpr RE::FormID       kVanillaPlain = 0x00000DCF;
         constexpr RE::FormID       kVanillaSlash = 0x000EF540;
 
-        // ms since the DLL was loaded (static init runs at LoadLibrary).
+        // ms since the DLL was loaded (static init runs at LoadLibrary). NowMs() is public (Probe.h).
         const auto g_t0 = std::chrono::steady_clock::now();
-
-        long long NowMs() {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_t0).count();
-        }
 
         // Identity maps built once at kDataLoaded on the main thread and read only on the
         // main thread afterwards (Tick runs as an SKSE task), so no locking is needed.
@@ -241,15 +240,86 @@ namespace MJ::Probe {
         State g_prev;
         bool  g_havePrev{ false };
 
-        std::string TypeName(const RE::BSIMusicType* a_t) {
-            if (!a_t) return "null";
-            if (const auto it = g_typeByIface.find(a_t); it != g_typeByIface.end())
-                return std::format("{}({:08X})", EdidOf(it->second), it->second->GetFormID());
-            return std::format("<unknown BSIMusicType {:p}>", static_cast<const void*>(a_t));
+        // ---- M0b additions (read-only) ----
+
+        // "A" / "B" for our two slot wrappers, "vanilla(FORMID)" for any other MUST wrapper.
+        std::string WrapperLabel(const RE::BSIMusicTrack* a_t) {
+            if (!a_t) return "none";
+            switch (Retarget::SlotOf(a_t)) {
+            case 0: return "A";
+            case 1: return "B";
+            default: break;
+            }
+            if (const auto* w = WrapperOf(a_t)) return std::format("vanilla({:08X})", w->GetFormID());
+            return std::format("<unknown {:p}>", static_cast<const void*>(a_t));
         }
+
+        std::string HandleStr(const RE::BSSoundHandle& a_h) {
+            // Raw fields only. BSSoundHandle::IsPlaying/IsValid are engine calls through
+            // relocations not checked against the binary for this purpose; not used.
+            return std::format("[soundID=0x{:08X} assumeSuccess={} state={}]", a_h.soundID, a_h.assumeSuccess,
+                               a_h.state.underlying());
+        }
+
+        // Every >=1000 ms while MUSExploreTundra is current or one of our wrappers is the
+        // current track: the inner single track's playback fields (DESIGN.md (main) section 8.1).
+        long long g_lastPosMs{ -1000000 };
+
+        void LogPosition(const State& a_s) {
+            if (!a_s.current) return;
+            const bool ours = Retarget::SlotOf(a_s.track) >= 0;
+            if (a_s.current != Retarget::Target() && !ours) return;
+            const auto now = NowMs();
+            if (now - g_lastPosMs < 1000) return;
+            g_lastPosMs = now;
+
+            auto* w     = a_s.track ? WrapperOf(a_s.track) : nullptr;
+            auto* inner = w ? w->track : nullptr;
+            const auto head = std::format("[probe] pos t=+{}ms type={} typeStatus={} trackIndex={}/{} wrapper={}", now,
+                                          TypeName(a_s.current), StatusName(a_s.typeStatus), a_s.index, a_s.ntracks,
+                                          WrapperLabel(a_s.track));
+            if (!inner) {
+                spdlog::info("{} (no inner track)", head);
+                return;
+            }
+            const auto t = static_cast<std::uint32_t>(inner->GetType());
+            if (inner->GetType() != RE::BSIMusicTrack::TrackType::kSingleTrack) {
+                spdlog::info("{} inner={} trackStatus={} (no position fields)", head, TrackTypeName(t),
+                             StatusName(inner->trackStatus.underlying()));
+                return;
+            }
+            const auto* st = static_cast<const RE::BGSMusicSingleTrack*>(inner);
+            spdlog::info("{} inner=Single trackStatus={} lastKnownPlaybackPosition={} nextCuePoint={} loopsRemaining={} "
+                         "trackHandle{} finaleHandle{}",
+                         head, StatusName(st->trackStatus.underlying()), st->lastKnownPlaybackPosition, st->nextCuePoint,
+                         st->loopsRemaining, HandleStr(st->trackHandle), HandleStr(st->finaleHandle));
+        }
+
+        // On every change of (current type, trackIndex, track pointer): which wrapper plays.
+        const RE::BSIMusicType*  g_npType{ nullptr };
+        std::uint32_t            g_npIndex{ 0xFFFFFFFF };
+        const RE::BSIMusicTrack* g_npTrack{ nullptr };
+
+        void LogNowPlaying(const State& a_s) {
+            if (a_s.current == g_npType && a_s.index == g_npIndex && a_s.track == g_npTrack) return;
+            g_npType  = a_s.current;
+            g_npIndex = a_s.index;
+            g_npTrack = a_s.track;
+            if (!a_s.track) return;
+            std::string inner = "?";
+            if (const auto* w = WrapperOf(a_s.track); w && w->track)
+                inner = TrackTypeName(static_cast<std::uint32_t>(w->track->GetType()));
+            spdlog::info("[probe] now-playing t=+{}ms type={} trackIndex={}/{} wrapper={} inner={} typeStatus={}", NowMs(),
+                         TypeName(a_s.current), a_s.index, a_s.ntracks, WrapperLabel(a_s.track), inner,
+                         StatusName(a_s.typeStatus));
+        }
+
+        // M0c stall detector: NowMs() of the previous watcher task (-1 before the first).
+        long long g_prevTickMs{ -1 };
 
         // Runs on the game main thread (SKSE task). Read-only.
         void Tick() {
+            const long long tickMs = NowMs();  // the stall detector's only per-tick cost (+ one subtraction below)
             State s;
             if (auto* mgr = RE::BSMusicManager::GetSingleton()) {
                 s.haveMgr = true;
@@ -271,6 +341,15 @@ namespace MJ::Probe {
                     }
                 }
             }
+            // Gap between two consecutive watcher tasks (nominally 250 ms). Logged only when
+            // > 400 ms: the main thread did not run SKSE tasks for that long.
+            if (g_prevTickMs >= 0 && tickMs - g_prevTickMs > 400) {
+                spdlog::info("[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}",
+                             tickMs - g_prevTickMs, g_prevTickMs, tickMs, TypeName(s.current), s.index, StatusName(s.typeStatus));
+            }
+            g_prevTickMs = tickMs;
+            LogPosition(s);
+            LogNowPlaying(s);
             if (g_havePrev && s == g_prev) return;
             g_prev     = s;
             g_havePrev = true;
@@ -319,7 +398,10 @@ namespace MJ::Probe {
                 if (g_taskPending.exchange(true)) continue;
                 if (const auto* tasks = SKSE::GetTaskInterface()) {
                     tasks->AddTask([] {
-                        if (g_alive) Tick();
+                        if (g_alive) {
+                            Tick();             // read-only probe
+                            Retarget::Tick();   // M0b: the only engine-memory writer (guarded, see Retarget.cpp)
+                        }
                         g_taskPending = false;
                     });
                 } else {
@@ -329,6 +411,57 @@ namespace MJ::Probe {
         }
 
     }  // namespace
+
+    long long NowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_t0).count();
+    }
+
+    std::string TypeName(const RE::BSIMusicType* a_t) {
+        if (!a_t) return "null";
+        if (const auto it = g_typeByIface.find(a_t); it != g_typeByIface.end())
+            return std::format("{}({:08X})", EdidOf(it->second), it->second->GetFormID());
+        return std::format("<unknown BSIMusicType {:p}>", static_cast<const void*>(a_t));
+    }
+
+    void LogTrackHistory(const RE::BSIMusicType* a_type, const char* a_tag) {
+        if (!a_type || !g_typeByIface.contains(a_type)) {
+            spdlog::info("[probe] trackHistory ({}): type {} not enumerated; not read", a_tag, TypeName(a_type));
+            return;
+        }
+        const auto&         hist   = a_type->trackHistory;
+        const auto&         tracks = a_type->tracks;
+        const std::uint32_t hn     = hist.size();
+        std::string         vals;
+        for (std::uint32_t i = 0; i < hn && i < 3; ++i) vals += std::format("{}{}", vals.empty() ? "" : ",", hist[i]);
+        std::string first = "n/a";
+        if (hn > 0) {
+            const std::uint32_t h0 = hist[0];
+            if (h0 < tracks.size()) {
+                const RE::BSIMusicTrack* t = tracks[h0];
+                if (!t) {
+                    first = std::format("tracks[{}]=null", h0);
+                } else if (const auto* w = WrapperOf(t)) {
+                    std::string inner = "?";
+                    if (w->track) inner = TrackTypeName(static_cast<std::uint32_t>(w->track->GetType()));
+                    const int slot = Retarget::SlotOf(t);
+                    first = std::format("tracks[{}]={} ({:08X}, inner {})", h0, slot == 0 ? "A" : slot == 1 ? "B" : "vanilla",
+                                        w->GetFormID(), inner);
+                } else {
+                    first = std::format("tracks[{}]=<unknown {:p}>", h0, static_cast<const void*>(t));
+                }
+            } else {
+                first = std::format("trackHistory[0]={} OUT OF RANGE (tracks={})", h0, tracks.size());
+            }
+        }
+        spdlog::info("[probe] trackHistory ({}): type={} currentTrackIndex={} tracks={} history size={} first=[{}] head: {}", a_tag,
+                     TypeName(a_type), a_type->currentTrackIndex, tracks.size(), hn, vals, first);
+    }
+
+    RE::BGSMusicTrackFormWrapper* WrapperOf(const RE::BSIMusicTrack* a_track) {
+        if (!a_track) return nullptr;
+        const auto it = g_trackByIface.find(a_track);
+        return it != g_trackByIface.end() ? it->second : nullptr;
+    }
 
     void OnDataLoaded() {
         spdlog::info("[probe] ===== M0a probe start: game {} =====", REL::Module::get().version().string());
@@ -357,7 +490,7 @@ namespace MJ::Probe {
         if (!g_watcher.th.joinable()) {
             g_alive         = true;
             g_watcher.th    = std::jthread(WatchLoop);
-            spdlog::info("[probe] watcher started (250 ms, read-only, logs on change only)");
+            spdlog::info("[probe] watcher started (250 ms; probe read-only, logs on change only; runs the retarget tick after it)");
         }
         spdlog::info("[probe] ===== M0a probe enumeration done =====");
     }
