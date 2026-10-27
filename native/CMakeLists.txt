@@ -53,6 +53,10 @@ if(MJ_BUILD_TESTS)
     option(MJ_TESTS_ASAN "Build mj_net_tests with MSVC /fsanitize=address" OFF)
     if(MJ_TESTS_ASAN)
         target_compile_options(mj_net_tests PRIVATE /fsanitize=address /Zi)
+        # vcpkg's spdlog/fmt are not ASan-built: switch off the STL container annotations so the
+        # linker's annotate_* mismatch check (LNK2038) passes. Heap/stack checks stay on.
+        target_compile_definitions(mj_net_tests PRIVATE _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION
+                                                        _DISABLE_OPTIONAL_ANNOTATION)
         target_link_options(mj_net_tests PRIVATE /DEBUG /INCREMENTAL:NO)
     endif()
 endif()
