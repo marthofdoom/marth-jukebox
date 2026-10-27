@@ -307,6 +307,7 @@ namespace MJ::Pool::detail {
                 // A-F4: the pooled file itself is bad: drop it from the pool (not "played"), so the next one is used.
                 mj::pool::RemoveEntry(s.index, j.env, j.key);
                 s.envs[j.env].rejected[j.key] = SteadyMs() + kSourceRejectMs;
+                s.envs[j.env].waitForPlay     = false;  // review B r3: a dropped head can empty a small pool; no play event will come
                 sl.retryAtMs                  = 0;
                 MarkDirtyLocked();
                 spdlog::error("[slots] slot {:02} ({}): pooled track {} is unusable and was dropped: {}", j.slot, j.env, j.display, r.error);
