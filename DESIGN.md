@@ -68,7 +68,18 @@ modlist (Requiem, LoreRim...). Instead the plugin edits the winning in-memory MU
    Default is library only, see docs/NEXUS-COMPLIANCE.md.
    Settings persist to an INI in `Data/SKSE/Plugins/`; the plugin `PUT`s the resulting profile to
    Harmony. Fallback if the framework proves unsuitable: own ImGui overlay as in MFO's Board (more
-   code, duplicate-hook risk with other ImGui mods).
+   code; it duplicates the framework's D3D/UI hooks, so the two must be mutually exclusive).
+   Research result (docs/MENU-FRAMEWORK.md, 2026-10-27): ADOPT. Two calls register a page
+   (`SetSection` + `AddSectionItem(name, cb)`, namespace `ImGuiMCP::`); the vendored header (LGPL-2.1)
+   wraps ImGui 1.90.8 so we never link imgui; the DLL is All Rights Reserved: list it as a REQUIREMENT,
+   never bundle it. Also needs ImGui Icons (Nexus 114790) and Address Library. The framework has no
+   settings persistence or hotkey API: we keep our own INI. The render callback runs on the UI thread:
+   it may only read atomics/copies. Correction: MFO does NOT use the framework (its Board is its own
+   ImGui overlay); it is Harbinger that does. Open (in-game tests): the cached-null-pointer risk because
+   our plugin sorts before "SKSE..." (log GetMenuFrameworkVersion() right after registering), 1.6.1170
+   compatibility of the installed 3.14.0 (it is a CommonLibSSE-NG build), whether our 250 ms poll and the
+   music keep running while the panel freezes the game, Ctrl+V paste into the masked key field, no
+   gamepad text entry (so the key/URL need a keyboard; everything else must work on a controller).
 
 ## 4. Category grouping (50 vanilla MUSC -> ~12 player-facing types)
 
