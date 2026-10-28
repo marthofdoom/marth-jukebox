@@ -489,6 +489,45 @@ namespace mj::config
 		return Settings{};
 	}
 
+	bool IsPlaceholderId(std::string_view id)
+	{
+		const std::string l = Lower(Clean(std::string(id)));
+		return l.empty() || l == "none" || l == "null" || l == "undefined";
+	}
+
+	HitVerdict CheckSearchHit(std::string_view service, std::string_view id, bool streaming)
+	{
+		if (service == "qobuz") {
+			return HitVerdict::Qobuz;  // never usable for an artist/playlist selector (DESIGN 8.8)
+		}
+		if (service != "local" && service != "ytmusic") {
+			return HitVerdict::OtherService;
+		}
+		if (service == "ytmusic" && !streaming) {
+			return HitVerdict::NeedsStreaming;
+		}
+		return IsPlaceholderId(id) ? HitVerdict::NoId : HitVerdict::Ok;
+	}
+
+	std::string PlaylistSearchNote(int shown, int noId, int qobuz, bool streaming)
+	{
+		if (shown > 0) {
+			return noId > 0 ? std::to_string(noId) + " YouTube playlist(s) came without an id from Harmony and are hidden." : "";
+		}
+		if (noId > 0) {
+			return "Harmony returned this YouTube playlist without an id; pick another or update Harmony.";
+		}
+		if (qobuz > 0) {
+			// Not "set AllowQobuz": Qobuz is never used for playlist/artist selectors (only as a streaming source).
+			return "Your playlists on the server are Qobuz playlists, which this plugin does not use; tick Allow streaming and "
+				   "search for a YouTube Music playlist.";
+		}
+		if (!streaming) {
+			return "Your library has no playlists; allow streaming to pick a YouTube Music playlist.";
+		}
+		return "";
+	}
+
 	Settings FirstRunSettings()
 	{
 		Settings s = DefaultSettings();
@@ -614,6 +653,12 @@ namespace mj::config
 			e.id = Clean(e.id);
 			if (e.id.size() > 256) {
 				diag.push_back(where + "id longer than 256 characters; cleared");
+				e.id.clear();
+			}
+			// Migration: a pick stored while Harmony returned "None" as the id (1.0.x, LoreRim) is not a real id: cleared,
+			// the environment stays configured and the profile says to re-pick it.
+			if (!e.id.empty() && IsPlaceholderId(e.id)) {
+				diag.push_back(where + "id is not a real id (Harmony returned none); re-pick it from the suggestions");
 				e.id.clear();
 			}
 			e.service = Lower(Clean(e.service));

@@ -136,6 +136,12 @@ namespace mj::config
 			case Mode::Artist:
 			case Mode::Playlist: {
 				const char* what = e.mode == Mode::Artist ? "artist" : "playlist";
+				if (!e.service.empty() && IsPlaceholderId(e.id)) {
+					ctx.Add(id, ProblemSeverity::Error,
+						std::string("Harmony returned this ") + what +
+							" without an id; pick another or update Harmony (environment left out of the profile)");
+					return false;
+				}
 				if (e.service.empty() && e.id.empty()) {
 					// A typed name without a pick: Harmony's selectors need the service id (game-source.md), so say what to do.
 					ctx.Add(id, ProblemSeverity::Error,

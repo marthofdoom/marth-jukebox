@@ -793,3 +793,31 @@ MJ_TEST(Settings_FirstRunDefaultsOnlyForAFreshInstall)
 		MJ_CHECK(st.Snapshot()->environments.empty());
 	}
 }
+
+// LoreRim field bug: Harmony returned ytmusic playlists with id "None"; library playlists all Qobuz.
+MJ_TEST(Settings_PlaylistIdNoneAndQobuzPlaylists)
+{
+	MJ_CHECK(IsPlaceholderId("None") && IsPlaceholderId("null") && IsPlaceholderId(" NONE ") && IsPlaceholderId(""));
+	MJ_CHECK(!IsPlaceholderId("PLx1abc") && !IsPlaceholderId("VLPL123"));
+
+	MJ_CHECK(CheckSearchHit("ytmusic", "None", true) == HitVerdict::NoId);
+	MJ_CHECK(CheckSearchHit("ytmusic", "PL1", true) == HitVerdict::Ok);
+	MJ_CHECK(CheckSearchHit("ytmusic", "PL1", false) == HitVerdict::NeedsStreaming);
+	MJ_CHECK(CheckSearchHit("qobuz", "123", true) == HitVerdict::Qobuz);
+	MJ_CHECK(CheckSearchHit("local", "a1", false) == HitVerdict::Ok);
+
+	MJ_CHECK(PlaylistSearchNote(0, 3, 0, true).find("without an id") != std::string::npos);
+	MJ_CHECK(PlaylistSearchNote(0, 0, 29, false).find("Qobuz playlists") != std::string::npos);
+	MJ_CHECK(PlaylistSearchNote(0, 0, 0, false).find("no playlists") != std::string::npos);
+	MJ_CHECK(PlaylistSearchNote(4, 0, 2, true).empty());
+	MJ_CHECK(PlaylistSearchNote(4, 1, 0, true).find("hidden") != std::string::npos);
+
+	// Migration: an INI from 1.0.x with Id=None keeps the environment configured, clears the id, says to re-pick.
+	Diagnostics d;
+	Settings    r = ParseIni("[Env:explore]\nMode=Playlist\nSelector=coffee shop guitar\nService=ytmusic\nId=None\nAllowStreaming=1\n", d);
+	const auto* e = r.Find("explore");
+	MJ_CHECK(e && e->mode == Mode::Playlist && e->service == "ytmusic" && e->id.empty());
+	bool said = false;
+	for (const auto& x : d) said |= x.find("re-pick") != std::string::npos;
+	MJ_CHECK(said);
+}

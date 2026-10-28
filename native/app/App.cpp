@@ -157,10 +157,22 @@ namespace MJ::App {
             g_testRunning = false;
         }
 
+        struct HitCounts {
+            int noId = 0, qobuz = 0;
+        };
+
         void AddHits(std::vector<SearchHit>& a_out, const std::vector<Net::SearchItem>& a_items, const char* a_kind, bool a_streaming,
-                     bool a_qobuz, const std::string& a_filter) {
+                     bool a_qobuz, const std::string& a_filter, HitCounts* a_counts = nullptr) {
+            const bool needsId = std::string_view(a_kind) == "playlist" || std::string_view(a_kind) == "artist";
             for (const auto& it : a_items) {
                 if (a_out.size() >= 200) return;
+                if (needsId) {
+                    // Never offer a hit that cannot be stored: no id ("None", Harmony bug) or Qobuz (field, LoreRim).
+                    const auto v = mj::config::CheckSearchHit(it.service, it.id, a_streaming);
+                    if (a_counts && v == mj::config::HitVerdict::NoId) ++a_counts->noId;
+                    if (a_counts && v == mj::config::HitVerdict::Qobuz) ++a_counts->qobuz;
+                    if (v != mj::config::HitVerdict::Ok) continue;
+                }
                 if (!ServiceAllowed(it.service, a_streaming, a_qobuz)) continue;
                 if (!a_filter.empty() && Lower(it.title).find(a_filter) == std::string::npos) continue;
                 SearchHit h;
@@ -200,20 +212,25 @@ namespace MJ::App {
                 } else {
                     const auto r = a_cl.Search(text, "artists", 50, a_st);
                     if (!r.Ok()) error = PlainError(r);
-                    else AddHits(hits, r.artists, "artist", a_req.streaming, qobuz, {});
+                    else {
+                        HitCounts counts;
+                        AddHits(hits, r.artists, "artist", a_req.streaming, qobuz, {}, &counts);
+                        if (hits.empty() && counts.noId > 0)
+                            error = "Harmony returned these artists without an id; pick another or update Harmony.";
+                    }
                 }
             } else if (a_req.kind == "playlist") {
+                HitCounts counts;
                 if (text.empty()) {
                     const auto r = a_cl.Playlists(a_st);
                     if (!r.Ok()) error = PlainError(r);
-                    else AddHits(hits, r.items, "playlist", a_req.streaming, qobuz, {});
+                    else AddHits(hits, r.items, "playlist", a_req.streaming, qobuz, {}, &counts);
                 } else {
                     const auto r = a_cl.Search(text, "playlists", 50, a_st);
                     if (!r.Ok()) error = PlainError(r);
-                    else AddHits(hits, r.playlists, "playlist", a_req.streaming, qobuz, {});
+                    else AddHits(hits, r.playlists, "playlist", a_req.streaming, qobuz, {}, &counts);
                 }
-                if (error.empty() && hits.empty() && !a_req.streaming)
-                    error = "Your library has no playlists; allow streaming to pick a YouTube Music playlist.";
+                if (error.empty()) error = mj::config::PlaylistSearchNote(static_cast<int>(hits.size()), counts.noId, counts.qobuz, a_req.streaming);
             } else if (a_req.kind == "query") {
                 if (!text.empty()) {
                     const auto r = a_cl.Search(text, "tracks", 50, a_st);

@@ -308,6 +308,11 @@ MJ_TEST(Hits_FilterByKindServiceAndQobuz)
 	MJ_CHECK(FilterHits(hits, Mode::Genre, false).size() == 1);
 	MJ_CHECK(FilterHits(hits, Mode::Query, true).empty());
 	MJ_CHECK(FilterHits(hits, Mode::Vanilla, true).empty());
+	// LoreRim: Harmony's ytmusic playlist hits carried id "None"; never offered.
+	std::vector<MJ::App::SearchHit> pl = { Hit("playlist", "ytmusic", "None", "P1"), Hit("playlist", "ytmusic", "null", "P2"),
+		Hit("playlist", "ytmusic", "PLabc", "P3") };
+	auto ok = FilterHits(pl, Mode::Playlist, true);
+	MJ_CHECK(ok.size() == 1 && ok[0].title == "P3");
 }
 
 MJ_TEST(Hits_ApplyStoresSelector)

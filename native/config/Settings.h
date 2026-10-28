@@ -123,6 +123,18 @@ namespace mj::config
 	// An existing INI is never changed: an environment without a section stays Vanilla.
 	[[nodiscard]] Settings FirstRunSettings();
 
+	// Harmony bug: some search results carry the id "None"/"null" instead of a real one. True for
+	// such placeholders and for an empty id: never offered, never stored, never sent to Harmony.
+	[[nodiscard]] bool IsPlaceholderId(std::string_view id);
+
+	// Search hit for an Artist/Playlist/Album pick: usable, or why not (the menu shows the reason).
+	enum class HitVerdict : std::uint8_t { Ok, NoId, Qobuz, NeedsStreaming, OtherService };
+	[[nodiscard]] HitVerdict CheckSearchHit(std::string_view service, std::string_view id, bool streaming);
+
+	// The menu's note for a playlist search/list (empty = none): `shown` usable hits, `noId` hidden for a missing id,
+	// `qobuz` hidden because they are Qobuz playlists.
+	[[nodiscard]] std::string PlaylistSearchNote(int shown, int noId, int qobuz, bool streaming);
+
 	// Clamp / validate in place. Every correction appends one line to `diag` (never the key or URL value).
 	void Sanitize(Settings& s, Diagnostics& diag);
 

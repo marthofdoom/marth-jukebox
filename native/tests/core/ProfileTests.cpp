@@ -314,3 +314,25 @@ MJ_TEST(Profile_FirstRunDefaultsAndNameOnlyArtist)
 	for (const auto& p : n.problems) clear |= p.environment == "town" && p.message.find("pick the artist from the suggestions") != std::string::npos;
 	MJ_CHECK(clear);
 }
+
+// LoreRim field bug: a playlist with service ytmusic and a placeholder/missing id is left out with a plain message.
+MJ_TEST(Profile_PlaylistWithoutRealId)
+{
+	Settings s = DefaultSettings();
+	auto&    e = s.environments["dungeon"];
+	e.mode           = Mode::Playlist;
+	e.selector       = "dragons dungeon";
+	e.service        = "ytmusic";
+	e.id             = "None";
+	e.allowStreaming = true;
+	const auto b = BuildProfile(s, false);
+	MJ_CHECK(!b.publishedTypes.contains("dungeon"));
+	bool plain = false;
+	for (const auto& p : b.problems) plain |= p.environment == "dungeon" && p.message.find("without an id; pick another or update Harmony") != std::string::npos;
+	MJ_CHECK(plain);
+	e.id = "";  // after the INI migration
+	const auto c = BuildProfile(s, false);
+	bool plain2 = false;
+	for (const auto& p : c.problems) plain2 |= p.environment == "dungeon" && p.message.find("pick another or update Harmony") != std::string::npos;
+	MJ_CHECK(!c.publishedTypes.contains("dungeon") && plain2);
+}
