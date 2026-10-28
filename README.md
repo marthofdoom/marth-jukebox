@@ -81,8 +81,9 @@ With no server address set, the plugin does nothing: all music stays vanilla and
 
 A fresh install (no `MarthJukebox.ini` yet) starts with two example environments, shown as normal rows in the page:
 **Exploration** = Query "Brass Fantasy Adventure" and **Towns and cities** = Artist "Per-Olov Kindgren" (YouTube Music).
-Both have **Allow streaming unticked**, so they play nothing until you tick it (or your library has matching tracks); the
-row then says "No matching tracks in your library: tick Allow streaming to fetch from YouTube Music". Change or reset them
+Both have **Allow streaming unticked**, so they play nothing until you tick it (the Exploration query can also match tracks in your own
+library; the town artist is a YouTube Music artist and needs streaming); with streaming unticked the
+row says "No matching tracks in your library: tick Allow streaming to fetch from YouTube Music". Change or reset them
 like any other environment. An existing settings file from 1.0.0 is not changed by this.
 
 1. Start the game and load into the world (or stay at the main menu).
