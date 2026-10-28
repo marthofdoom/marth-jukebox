@@ -42,6 +42,7 @@ namespace MJ::Pool::detail {
             enum class Kind { kNone, kPrepare, kCommit, kDiscard } kind = Kind::kNone;
             int         slot = -1;
             std::string env, key, file, display;
+            std::string sources;  // the environment's CURRENT sources (consent) at pick time
             bool        replay = false;
             // kPrepare from the pool: one path. Replay: candidates (key, cache file names), least recently played first.
             std::vector<std::pair<std::string, std::vector<std::string>>> candidates;
@@ -202,7 +203,10 @@ namespace MJ::Pool::detail {
                     if (s.playHandle[i].load() != sl.eventHandle || s.playIdx[i].load() != sl.eventIdx) continue;  // newer event re-arms
                     need = true;
                 } else if (sl.replay && sl.owner == env && !head) {
-                    need = false;  // a replay is in place and still nothing new: leave it until the next play
+                    // A replay is in place and still nothing new: leave it until the next play, unless it no longer belongs
+                    // to the current selection / consent (review R6-1).
+                    const auto ep = plan.envs.find(env);
+                    need = !mj::pool::RepeatAllowed(s.index, env, sl.owner, sl.contentKey, ep != plan.envs.end() ? ep->second.sources : "library");
                 }
                 if (!need) {
                     sl.failing = false;
@@ -231,19 +235,24 @@ namespace MJ::Pool::detail {
                     s.jobStop.request_stop();
                     s.jobUrgent = true;  // once
                 }
-                for (const auto& key : mj::pool::ReplayOrder(s.index, env, sl.contentKey)) {
+                std::string sources = "library";
+                if (const auto ep = plan.envs.find(env); ep != plan.envs.end()) sources = ep->second.sources;
+                for (const auto& key : mj::pool::ReplayOrder(s.index, env, sl.contentKey, sources)) {
                     const auto [svc, id] = SplitKey(key);
                     if (svc.empty() || id.empty()) continue;
                     job.candidates.push_back({ key, { mj::pool::CacheFileName(svc, id, "flac"), mj::pool::CacheFileName(svc, id, "wav") } });
                 }
                 if (!job.candidates.empty()) {
-                    job.kind   = Job::Kind::kPrepare;
-                    job.slot   = i;
-                    job.env    = env;
-                    job.replay = true;
+                    job.kind    = Job::Kind::kPrepare;
+                    job.slot    = i;
+                    job.env     = env;
+                    job.replay  = true;
+                    job.sources = sources;
                     return job;
                 }
-                ApplyDryPoolAction(s, sl, i, env, mj::retarget::ChooseDryPoolAction(false, sl.owner == env && !sl.contentKey.empty()), now);
+                ApplyDryPoolAction(s, sl, i, env,
+                                   mj::retarget::ChooseDryPoolAction(false, mj::pool::RepeatAllowed(s.index, env, sl.owner, sl.contentKey, sources)),
+                                   now);
             }
             return job;
         }
@@ -336,8 +345,10 @@ namespace MJ::Pool::detail {
                 std::scoped_lock lk(s.mx);
                 auto&            sl = s.slots[j.slot];
                 if (src.empty()) {
-                    ApplyDryPoolAction(s, sl, j.slot, j.env,
-                                       mj::retarget::ChooseDryPoolAction(false, sl.owner == j.env && !sl.contentKey.empty()), SteadyMs());
+                    ApplyDryPoolAction(
+                        s, sl, j.slot, j.env,
+                        mj::retarget::ChooseDryPoolAction(false, mj::pool::RepeatAllowed(s.index, j.env, sl.owner, sl.contentKey, j.sources)),
+                        SteadyMs());
                     return;
                 }
                 s.inUse.insert(j.file);

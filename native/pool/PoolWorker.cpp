@@ -301,7 +301,19 @@ namespace MJ::Pool {
                 if (ns.statusKnown && netOn && s.cacheReady) {
                     std::map<std::string, std::string> wanted;
                     for (const auto& [id, ep] : plan->envs) wanted[id] = ep.fingerprint;
-                    dropped = mj::pool::DropChangedPools(s.index, wanted);
+                    // Review R6-1: a changed selection / streaming consent also forgets the environment's recent tracks
+                    // and what its slot holds, so nothing of the old selection is replayed or repeated; the environment
+                    // goes vanilla until a track of the new selection lands.
+                    dropped = mj::pool::DropChangedSelections(s.index, wanted);
+                    for (const auto& d : dropped) {
+                        for (auto& sl : s.slots) {
+                            if (sl.owner != d) continue;
+                            sl.owner.clear();
+                            sl.contentKey.clear();
+                            sl.fresh  = false;
+                            sl.replay = false;
+                        }
+                    }
                     if (!dropped.empty()) MarkDirtyLocked();
                 }
                 for (auto& [id, ep] : plan->envs) {
@@ -314,7 +326,10 @@ namespace MJ::Pool {
                     if (!plan->envs.contains(id)) es.nowPlaying.clear();  // not playing from Harmony any more
                 s.plan = plan;
             }
-            for (const auto& d : dropped) spdlog::info("[pool] pool {} dropped (selector, sources or mode changed, or now Vanilla)", d);
+            for (const auto& d : dropped)
+                spdlog::warn("[pool] {}: selection, streaming consent or mode changed (or now Vanilla): its pool, recently played list and "
+                             "slot content are dropped; nothing of the old selection plays again, the environment stays vanilla until a "
+                             "track of the new selection is ready", d);
             std::size_t typesMapped = 0;
             for (const auto v : plan->typeSlot) typesMapped += v >= 0;
             spdlog::info("[plan] #{}: engine writes {}{}; {} environment(s), {} music type(s) mapped to slots", plan->gen,

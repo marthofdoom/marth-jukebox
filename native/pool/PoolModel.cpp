@@ -331,17 +331,77 @@ namespace mj::pool
 		return (UrgentRefill(envId, have) ? 1000 : 0) + (IsHotEnvironment(envId) ? 100 : 0) + std::max(0, target - have);
 	}
 
-	std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude)
+	bool ServiceAllowedBySources(std::string_view service, std::string_view sources)
+	{
+		if (sources == "all") {
+			return true;
+		}
+		if (sources.empty()) {
+			sources = "library";
+		}
+		const std::string_view want = service == "local" ? std::string_view("library") : service;
+		while (!sources.empty()) {
+			const auto comma = sources.find(',');
+			const auto part  = sources.substr(0, comma);
+			if (part == want) {
+				return true;
+			}
+			if (comma == std::string_view::npos) {
+				break;
+			}
+			sources.remove_prefix(comma + 1);
+		}
+		return false;
+	}
+
+	namespace
+	{
+		std::string_view ServiceOf(std::string_view key)
+		{
+			const auto c = key.find(':');
+			return c == std::string_view::npos ? std::string_view() : key.substr(0, c);
+		}
+	}
+
+	std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude, std::string_view sources)
 	{
 		std::vector<std::string> out;
 		if (const auto r = index.recent.find(envId); r != index.recent.end()) {
 			for (const auto& k : r->second) {  // oldest first
-				if (k != exclude) {
+				if (k != exclude && ServiceAllowedBySources(ServiceOf(k), sources)) {
 					out.push_back(k);
 				}
 			}
 		}
 		return out;
+	}
+
+	bool RepeatAllowed(const PoolIndex& index, std::string_view envId, std::string_view owner, std::string_view contentKey,
+		std::string_view sources)
+	{
+		if (owner != envId || contentKey.empty() || !ServiceAllowedBySources(ServiceOf(contentKey), sources)) {
+			return false;
+		}
+		if (IsRecent(index, envId, contentKey)) {
+			return true;
+		}
+		if (const auto p = index.pools.find(envId); p != index.pools.end()) {
+			for (const auto& e : p->second.entries) {
+				if (e.Key() == contentKey) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	std::vector<std::string> DropChangedSelections(PoolIndex& index, const std::map<std::string, std::string>& wanted)
+	{
+		auto dropped = DropChangedPools(index, wanted);
+		for (const auto& env : dropped) {
+			index.recent.erase(env);
+		}
+		return dropped;
 	}
 
 	bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key)

@@ -116,9 +116,25 @@ namespace mj::pool
 	[[nodiscard]] bool UrgentRefill(std::string_view envId, int have);
 	// Which environment the pool thread refills next: larger first. Urgent before anything; then hot; then the gap.
 	[[nodiscard]] int RefillScore(std::string_view envId, int have, int target);
+	// Review R6-1: whether a track of `service` may play under the environment's CURRENT `sources` (consent):
+	// "library" -> service "local"; "ytmusic" / "qobuz" only when named; "all" (only used with AllowQobuz=1) -> any.
+	[[nodiscard]] bool ServiceAllowedBySources(std::string_view service, std::string_view sources);
+
 	// Recently played keys to rotate through a slot while its pool is dry: least recently played first, without
-	// `exclude` (the track the slot holds now). The caller keeps the ones whose cache file still exists.
-	[[nodiscard]] std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude);
+	// `exclude` (the track the slot holds now) and without services the current `sources` do not allow. The caller keeps
+	// the ones whose cache file still exists.
+	[[nodiscard]] std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude,
+		std::string_view sources = "all");
+
+	// Review R6-1: may the track a slot holds be repeated for `envId`? Only if the slot holds a track of this environment
+	// that belongs to its CURRENT selection (still pooled, or in the recent list, which a selection change clears) and
+	// whose service the current `sources` allow.
+	[[nodiscard]] bool RepeatAllowed(const PoolIndex& index, std::string_view envId, std::string_view owner, std::string_view contentKey,
+		std::string_view sources);
+
+	// DropChangedPools + the dropped environments' recent-played lists: their tracks belong to a selection (or a streaming
+	// consent) the player changed, so they must never be replayed. Returns the dropped environment ids.
+	std::vector<std::string> DropChangedSelections(PoolIndex& index, const std::map<std::string, std::string>& wanted);
 
 	// The preview / truncation guard (DESIGN 8.8). Tracks over 60 s must decode to at least 90% of the announced duration.
 	// With Harmony's trim_silence on (review R5-4) a long silent tail legitimately shortens a track, so then a track is

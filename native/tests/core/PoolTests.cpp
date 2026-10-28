@@ -432,3 +432,47 @@ MJ_TEST(Pool_PreviewGuardWithTrim)
 	MJ_CHECK(!PreviewOrTruncated(210.0, 224.0, false)); // 94%: fine either way
 	MJ_CHECK(!PreviewOrTruncated(40.0, 59.0, false));   // tracks up to 60 s are not checked
 }
+
+// Review R6-1: replays and repeats follow the CURRENT selection and streaming consent.
+MJ_TEST(Pool_ReplayRespectsConsentAndSelection)
+{
+	MJ_CHECK(ServiceAllowedBySources("local", "library") && !ServiceAllowedBySources("ytmusic", "library"));
+	MJ_CHECK(ServiceAllowedBySources("ytmusic", "library,ytmusic") && ServiceAllowedBySources("local", "library,ytmusic"));
+	MJ_CHECK(!ServiceAllowedBySources("qobuz", "library,ytmusic"));  // Qobuz never without AllowQobuz
+	MJ_CHECK(ServiceAllowedBySources("qobuz", "library,ytmusic,qobuz"));
+	MJ_CHECK(ServiceAllowedBySources("ytmusic", "all") && !ServiceAllowedBySources("ytmusic", ""));
+
+	// Unchanged selection: the replay behaviour stays.
+	PoolIndex idx;
+	idx.pools["combat"].fingerprint = "fp-stream";
+	AddRecent(idx, "combat", "ytmusic:old1");
+	AddRecent(idx, "combat", "local:lib1");
+	AddRecent(idx, "combat", "ytmusic:now");
+	MJ_CHECK(ReplayOrder(idx, "combat", "ytmusic:now", "library,ytmusic").size() == 2);
+	MJ_CHECK(RepeatAllowed(idx, "combat", "combat", "ytmusic:now", "library,ytmusic"));
+
+	// The player UNTICKS streaming: same environment, sources become "library" (and the fingerprint changes).
+	// Even before the pool is dropped, no YouTube track is replayed or repeated.
+	const auto lib = ReplayOrder(idx, "combat", "ytmusic:now", "library");
+	MJ_CHECK(lib.size() == 1 && lib[0] == "local:lib1");
+	MJ_CHECK(!RepeatAllowed(idx, "combat", "combat", "ytmusic:now", "library"));
+	// After the drop the recent list is gone too: nothing of the old selection is left -> Fail (vanilla).
+	const auto dropped = DropChangedSelections(idx, { { "combat", "fp-library" } });
+	MJ_CHECK(dropped.size() == 1 && !idx.recent.contains("combat"));
+	MJ_CHECK(ReplayOrder(idx, "combat", "", "library").empty());
+	MJ_CHECK(!RepeatAllowed(idx, "combat", "combat", "local:lib1", "library"));
+
+	// A selector change with a dry pool: same outcome (nothing of the old selection replays).
+	PoolIndex sel;
+	sel.pools["explore"].fingerprint = "ambient";
+	AddRecent(sel, "explore", "local:a");
+	(void)DropChangedSelections(sel, { { "explore", "folk" } });
+	MJ_CHECK(ReplayOrder(sel, "explore", "", "library").empty() && !RepeatAllowed(sel, "explore", "explore", "local:a", "library"));
+	// Unchanged environments keep their recent lists.
+	PoolIndex keep;
+	keep.pools["explore"].fingerprint = "ambient";
+	AddRecent(keep, "explore", "local:a");
+	MJ_CHECK(DropChangedSelections(keep, { { "explore", "ambient" } }).empty() && IsRecent(keep, "explore", "local:a"));
+	// A slot owned by another environment, or with unknown content, never repeats.
+	MJ_CHECK(!RepeatAllowed(keep, "explore", "combat", "local:a", "library") && !RepeatAllowed(keep, "explore", "explore", "", "library"));
+}
