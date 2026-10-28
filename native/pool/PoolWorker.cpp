@@ -284,6 +284,7 @@ namespace MJ::Pool {
                 ep.sources             = src.sources;
                 ep.streamingDropped    = src.streamingDropped && ns.statusKnown;
                 ep.fingerprint         = mj::pool::Fingerprint(id, *e, ep.sources);
+                ep.consent             = mj::pool::ConsentSources(snap, *e);
                 if (ep.slot >= 0) {
                     plan->slotEnv[ep.slot] = id;
                     for (const auto i : idxs) plan->typeSlot[i] = ep.slot;
@@ -293,7 +294,7 @@ namespace MJ::Pool {
             for (const auto& u : slots.unassigned)
                 spdlog::warn("[plan] environment {} is active but all {} slots are taken: it stays Vanilla", u, kSlots);
 
-            std::vector<std::string> dropped;
+            std::vector<std::string> dropped, consentLost;
             {
                 std::scoped_lock lk(s.mx);
                 // Pools are matched against the new fingerprints only once the server's capabilities are known
@@ -310,11 +311,33 @@ namespace MJ::Pool {
                             if (sl.owner != d) continue;
                             sl.owner.clear();
                             sl.contentKey.clear();
+                            sl.contentFile.clear();  // R7-3: the old cache file becomes evictable
                             sl.fresh  = false;
                             sl.replay = false;
                         }
                     }
                     if (!dropped.empty()) MarkDirtyLocked();
+                }
+                // Review R7-1: consent is enforced ALWAYS, also offline (before the server's capabilities are known): pool
+                // entries, replayable keys and slot contents of services the player no longer consented to are removed.
+                if (s.cacheReady) {
+                    std::map<std::string, std::string> consent;
+                    for (const auto& [id, ep] : plan->envs) consent[id] = ep.consent;
+                    consentLost = mj::pool::ApplyConsent(s.index, consent);
+                    for (auto& sl : s.slots) {
+                        const auto ep = plan->envs.find(sl.owner);
+                        if (ep == plan->envs.end() || sl.contentKey.empty()) continue;
+                        const auto c = sl.contentKey.find(':');
+                        if (c != std::string::npos && !mj::pool::ServiceAllowedBySources(sl.contentKey.substr(0, c), ep->second.consent)) {
+                            consentLost.push_back(sl.owner + " (slot content)");
+                            sl.owner.clear();
+                            sl.contentKey.clear();
+                            sl.contentFile.clear();
+                            sl.fresh  = false;
+                            sl.replay = false;
+                        }
+                    }
+                    if (!consentLost.empty()) MarkDirtyLocked();
                 }
                 for (auto& [id, ep] : plan->envs) {
                     // Kept until the cause changes (the next Replan recomputes it), never cleared by a refill.
@@ -326,6 +349,9 @@ namespace MJ::Pool {
                     if (!plan->envs.contains(id)) es.nowPlaying.clear();  // not playing from Harmony any more
                 s.plan = plan;
             }
+            for (const auto& d : consentLost)
+                spdlog::warn("[pool] {}: tracks of a service the player no longer allows (streaming / Qobuz consent) were removed from "
+                             "the pool, the replay list or the slot; they will not play", d);
             for (const auto& d : dropped)
                 spdlog::warn("[pool] {}: selection, streaming consent or mode changed (or now Vanilla): its pool, recently played list and "
                              "slot content are dropped; nothing of the old selection plays again, the environment stays vanilla until a "

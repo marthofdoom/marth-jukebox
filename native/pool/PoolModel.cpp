@@ -140,6 +140,11 @@ namespace mj::pool
 			recent[env] = json(std::vector<std::string>(keys.begin(), keys.end()));
 		}
 		j["recent"] = std::move(recent);
+		json replay = json::object();
+		for (const auto& [env, keys] : index.replayable) {
+			replay[env] = json(std::vector<std::string>(keys.begin(), keys.end()));
+		}
+		j["replayable"] = std::move(replay);
 		// Invalid UTF-8 from a server string must not throw: replace it.
 		return j.dump(1, '\t', false, json::error_handler_t::replace);
 	}
@@ -200,12 +205,17 @@ namespace mj::pool
 				out.pools.emplace(env, std::move(p));
 			}
 		}
-		if (const auto rec = j.find("recent"); rec != j.end() && rec->is_object()) {
+		// "recent" and (since R7-2, optional: an older index has none, so nothing is replayable until played) "replayable".
+		auto lists = [&](const char* a_key, std::map<std::string, std::deque<std::string>, std::less<>>& a_out) {
+			const auto rec = j.find(a_key);
+			if (rec == j.end() || !rec->is_object()) {
+				return;
+			}
 			for (const auto& [env, rj] : rec->items()) {
 				if (!rj.is_array() || env.empty() || env.size() > 64) {
 					continue;
 				}
-				auto& dq = out.recent[env];
+				auto& dq = a_out[env];
 				for (const auto& k : rj) {
 					if (k.is_string()) {
 						dq.push_back(Bounded(k.get<std::string>(), 330));
@@ -215,7 +225,9 @@ namespace mj::pool
 					dq.pop_front();
 				}
 			}
-		}
+		};
+		lists("recent", out.recent);
+		lists("replayable", out.replayable);
 		return true;
 	}
 
@@ -366,7 +378,7 @@ namespace mj::pool
 	std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude, std::string_view sources)
 	{
 		std::vector<std::string> out;
-		if (const auto r = index.recent.find(envId); r != index.recent.end()) {
+		if (const auto r = index.replayable.find(envId); r != index.replayable.end()) {
 			for (const auto& k : r->second) {  // oldest first
 				if (k != exclude && ServiceAllowedBySources(ServiceOf(k), sources)) {
 					out.push_back(k);
@@ -382,7 +394,8 @@ namespace mj::pool
 		if (owner != envId || contentKey.empty() || !ServiceAllowedBySources(ServiceOf(contentKey), sources)) {
 			return false;
 		}
-		if (IsRecent(index, envId, contentKey)) {
+		if (const auto r = index.replayable.find(envId);
+			r != index.replayable.end() && std::find(r->second.begin(), r->second.end(), contentKey) != r->second.end()) {
 			return true;
 		}
 		if (const auto p = index.pools.find(envId); p != index.pools.end()) {
@@ -399,9 +412,65 @@ namespace mj::pool
 	{
 		auto dropped = DropChangedPools(index, wanted);
 		for (const auto& env : dropped) {
-			index.recent.erase(env);
+			index.replayable.erase(env);  // the recent list stays (repeat avoidance, review R7-2)
 		}
 		return dropped;
+	}
+
+	std::string ConsentSources(const config::Settings& s, const config::EnvironmentSetting& e)
+	{
+		if (!e.allowStreaming) {
+			return "library";
+		}
+		return s.global.allowQobuz ? "library,ytmusic,qobuz" : "library,ytmusic";
+	}
+
+	std::vector<std::string> ApplyConsent(PoolIndex& index, const std::map<std::string, std::string>& consentByEnv)
+	{
+		std::vector<std::string> changed;
+		for (const auto& [env, consent] : consentByEnv) {
+			bool lost = false;
+			if (const auto p = index.pools.find(env); p != index.pools.end()) {
+				lost |= std::erase_if(p->second.entries, [&](const PoolEntry& e) { return !ServiceAllowedBySources(e.service, consent); }) > 0;
+			}
+			if (const auto r = index.replayable.find(env); r != index.replayable.end()) {
+				lost |= std::erase_if(r->second, [&](const std::string& k) { return !ServiceAllowedBySources(ServiceOf(k), consent); }) > 0;
+			}
+			if (lost) {
+				changed.push_back(env);
+			}
+		}
+		return changed;
+	}
+
+	const PoolEntry* FirstAllowedHead(const PoolIndex& index, std::string_view envId, std::string_view consent)
+	{
+		const auto p = index.pools.find(envId);
+		if (p == index.pools.end()) {
+			return nullptr;
+		}
+		for (const auto& e : p->second.entries) {
+			if (ServiceAllowedBySources(e.service, consent)) {
+				return &e;
+			}
+		}
+		return nullptr;
+	}
+
+	void AddReplayable(PoolIndex& index, std::string_view envId, std::string_view key)
+	{
+		auto it = index.replayable.find(envId);
+		if (it == index.replayable.end()) {
+			it = index.replayable.emplace(std::string(envId), std::deque<std::string>{}).first;
+		}
+		auto& dq = it->second;
+		if (const auto f = std::find(dq.begin(), dq.end(), key); f != dq.end()) {
+			dq.erase(f);
+		}
+		dq.emplace_back(key);
+		while (dq.size() > kRecentPerEnv) {
+			dq.pop_front();
+		}
 	}
 
 	bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key)

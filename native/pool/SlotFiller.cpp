@@ -94,6 +94,7 @@ namespace MJ::Pool::detail {
                 }
                 mj::pool::RemoveEntry(s.index, e.env, key);
                 mj::pool::AddRecent(s.index, e.env, key);
+                mj::pool::AddReplayable(s.index, e.env, key);
                 sl.fresh      = false;
                 sl.servedAtMs = e.ms;
                 s.envs[e.env].nowPlaying = display;
@@ -104,6 +105,7 @@ namespace MJ::Pool::detail {
             } else if (sl.owner == e.env && sl.replay) {
                 std::tie(service, id) = SplitKey(sl.contentKey);
                 mj::pool::AddRecent(s.index, e.env, sl.contentKey);  // rotates it to the newest end
+                mj::pool::AddReplayable(s.index, e.env, sl.contentKey);
                 sl.servedAtMs = e.ms;
                 const auto t = s.playedTitles.find(sl.contentKey);
                 s.envs[e.env].nowPlaying = "(replay while Harmony refills) " + (t != s.playedTitles.end() ? t->second : std::string("an earlier track"));
@@ -174,7 +176,12 @@ namespace MJ::Pool::detail {
 
                 // 1. A prepared .tmp waiting for its rename.
                 if (sl.prepared) {
-                    const bool valid = writable && sl.prepEnv == env && (sl.prepReplay || InPool(s, env, sl.prepKey));
+                    // A prepared replay must still be allowed by the consent (R7-1); a prepared pool track must still be pooled.
+                    const auto epv   = plan.envs.find(env);
+                    const bool valid = writable && sl.prepEnv == env &&
+                                       (sl.prepReplay ? mj::pool::ServiceAllowedBySources(SplitKey(sl.prepKey).first,
+                                                                                          epv != plan.envs.end() ? epv->second.consent : "library")
+                                                      : InPool(s, env, sl.prepKey));
                     if (!valid) {
                         sl.prepared = false;
                         job.kind    = Job::Kind::kDiscard;
@@ -194,8 +201,9 @@ namespace MJ::Pool::detail {
                 }
                 if (!writable) continue;
 
-                const auto  pit  = s.index.pools.find(env);
-                const auto* head = (pit == s.index.pools.end() || pit->second.entries.empty()) ? nullptr : &pit->second.entries.front();
+                // R7-1: never a pool head of a service the player did not consent to (defence in depth; ApplyConsent removes them).
+                const auto  epc  = plan.envs.find(env);
+                const auto* head = mj::pool::FirstAllowedHead(s.index, env, epc != plan.envs.end() ? epc->second.consent : "library");
                 const bool  contentInPool = InPool(s, env, sl.contentKey);
                 bool        need = sl.owner != env || !sl.fresh || !contentInPool;
                 if (sl.refreshPending) {
@@ -206,7 +214,7 @@ namespace MJ::Pool::detail {
                     // A replay is in place and still nothing new: leave it until the next play, unless it no longer belongs
                     // to the current selection / consent (review R6-1).
                     const auto ep = plan.envs.find(env);
-                    need = !mj::pool::RepeatAllowed(s.index, env, sl.owner, sl.contentKey, ep != plan.envs.end() ? ep->second.sources : "library");
+                    need = !mj::pool::RepeatAllowed(s.index, env, sl.owner, sl.contentKey, ep != plan.envs.end() ? ep->second.consent : "library");
                 }
                 if (!need) {
                     sl.failing = false;
@@ -236,7 +244,7 @@ namespace MJ::Pool::detail {
                     s.jobUrgent = true;  // once
                 }
                 std::string sources = "library";
-                if (const auto ep = plan.envs.find(env); ep != plan.envs.end()) sources = ep->second.sources;
+                if (const auto ep = plan.envs.find(env); ep != plan.envs.end()) sources = ep->second.consent;  // R7-3: settings consent
                 for (const auto& key : mj::pool::ReplayOrder(s.index, env, sl.contentKey, sources)) {
                     const auto [svc, id] = SplitKey(key);
                     if (svc.empty() || id.empty()) continue;
