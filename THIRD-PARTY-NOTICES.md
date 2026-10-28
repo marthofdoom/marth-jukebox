@@ -69,10 +69,9 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 
 ## nlohmann/json (MIT)
 
-MIT License. The copyright line is the one in the LICENSE.MIT file of https://github.com/nlohmann/json (not reproduced here
-because it could not be read from a local copy while preparing this release):
+MIT License (https://github.com/nlohmann/json, LICENSE.MIT):
 
-Copyright (c) <holders named in the upstream LICENSE.MIT>
+Copyright (c) 2013-2026 Niels Lohmann
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
@@ -89,7 +88,7 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 
 ## fmt (MIT with exception)
 
-Copyright (c) <holders named in the upstream LICENSE.rst of https://github.com/fmtlib/fmt>
+Copyright (c) 2012 - present, Victor Zverovich and {fmt} contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
@@ -110,11 +109,11 @@ As an exception, if, as a result of your compiling your source code, portions of
 machine-executable object form of such source code, you may redistribute such embedded portions in such object form
 without including the above copyright and permission notices.
 
-(Standard fmt licence text; the copyright line is in the upstream repository.)
+(From https://github.com/fmtlib/fmt, LICENSE, version 10.2.1.)
 
 ## rapidcsv (BSD-3-Clause)
 
-Copyright (c) <holder named in the upstream LICENSE of https://github.com/d99kris/rapidcsv>
+Copyright (c) 2017, Kristofer Berggren
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following
