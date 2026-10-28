@@ -361,7 +361,7 @@ namespace MJ::Menu
 		if (a_mode == Mode::Genre) {
 			return !a_hit.id.empty() || !a_hit.title.empty();
 		}
-		return !a_hit.id.empty();
+		return !mj::config::IsPlaceholderId(a_hit.id);  // "None" from Harmony is not an id
 	}
 
 	std::vector<App::SearchHit> FilterHits(const std::vector<App::SearchHit>& a_hits, Mode a_mode, bool a_allowStreaming,
