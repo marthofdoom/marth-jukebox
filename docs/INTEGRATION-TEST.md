@@ -24,6 +24,11 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
    now=<same as the event> inner trackStatus=Playing`. A line ending `<- NOT playing` or a `[slots] slot NN ... cannot play`
    error means the game could not play the file: keep the log.
 
+3. Every change of the music the game is playing gets one `[music] current: <type> ...` line (what type, whether it is
+   retargeted to a slot, its status, which entry is selected and whether that entry is our slot with a sound handle).
+   A retargeted type that is current for 2 s without a play event gets one `[music] ... gave no play event for 2 s` warning.
+   For a fight: note the clock time it starts and what you hear (silence / vanilla combat music / a Harmony track).
+
 ## 2. Configure (menu or INI) (acceptance 3)
 1. Set ServerUrl + PersonalKey, and: `explore` = Genre (a genre the library really has; the picker lists them),
    `combat` = Query `epic battle music orchestral` with streaming ON, `dungeon` = Artist from the library.
