@@ -31,7 +31,8 @@ Version 1.0.0. Licence: MIT. Source: https://github.com/marthofdoom/marth-jukebo
 ## Requirements
 
 - **Skyrim Special Edition / Anniversary Edition, runtime 1.6.x.** The only runtime this release was tested on is
-  **1.6.1170** (LoreRim, Linux/Proton with Mod Organizer 2). Skyrim 1.5.97 is **not supported** in this release.
+  **1.6.1170**, on Linux/Proton with Mod Organizer 2: the 1.0 build was played on a Steam Deck (Tuxborn); the file-swap
+  mechanism itself was first proven on a desktop LoreRim install. Skyrim 1.5.97 is **not supported** in this release.
 - SKSE64 matching your game version.
 - Address Library for SKSE Plugins (Nexus Mods).
 - SKSE Menu Framework (Nexus Mods, mod 120352) for the settings page.
@@ -266,10 +267,19 @@ refers to, but removing it from an existing save has not been tested; make a bac
 
 ## Known limits
 
-- **Tested on Linux/Proton with Mod Organizer 2 only (Skyrim 1.6.1170).** The plugin replaces a music file with the next
+- **Tested on Linux/Proton with Mod Organizer 2 only (Skyrim 1.6.1170); the 1.0 build was played mainly on a Steam Deck.**
+  A full play-through on a desktop LoreRim install was not part of this release's testing. The plugin replaces a music file with the next
   track while it is still playing (the game re-opens the file for every song). That worked every time on Proton. On
   **native Windows this is unverified**: if Windows refuses to replace a file the game has open, the plugin keeps the
   prepared file and retries when that slot is quiet (and logs it). It never forces it.
+- **Long pauses seen on the Steam Deck.** In one Steam Deck session the log showed main-thread pauses of 15-26 seconds
+  (loading screens, autosaves, and a few while a track was downloading; one with nothing of the plugin running). The
+  log now says what the plugin was doing at each long pause (`[stall] ... | ours: ...`). If you see long hitches, turn
+  features off one at a time (see [Kill switches](#kill-switches)) and send the log. This is under investigation.
+- **The first start after install creates 24 short silent placeholder files** (`Music/Harmony/slot_NN.wav`, about 4 MB
+  in total). The game only plays slot files that existed when it started, so the very first session after a fresh
+  install can play Harmony music only in the environments whose slot already existed; restart the game once after
+  installing for everything to work.
 - **Skyrim 1.5.97 is unsupported.** Skyrim VR is untested.
 - **Gamepad has no text entry** in the settings page (a limit of the SKSE Menu Framework): use a keyboard to type the
   server address and key.
