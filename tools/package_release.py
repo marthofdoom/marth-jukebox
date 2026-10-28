@@ -7,7 +7,8 @@ Writes into --out-dir (default: ./dist):
   MarthJukebox-<version>.zip          installable by MO2 / Vortex / by hand (extract into the game's Data folder):
       SKSE/Plugins/MarthJukebox.dll
       MarthJukebox.esp
-      README.md  LICENSE  THIRD-PARTY-NOTICES.md  LICENSE-LGPL-2.1
+      docs/MarthJukebox/README.md  LICENSE  THIRD-PARTY-NOTICES.md  LICENSE-LGPL-2.1
+  (the documents live in their own folder so installing the mod cannot overwrite another mod's Data/ files)
   MarthJukebox-<version>-symbols.zip  SKSE/Plugins/MarthJukebox.pdb only (crash symbolication, not for players)
 
 <version> is the first line of the file VERSION at the repository root (native/CMakeLists.txt reads the same file, so
@@ -63,15 +64,17 @@ def main() -> None:
     main_files = {
         "SKSE/Plugins/MarthJukebox.dll": need(a.dll, "DLL"),
         "MarthJukebox.esp": esp,
-        "README.md": need(ROOT / "README.md", "README.md"),
-        "LICENSE": need(ROOT / "LICENSE", "LICENSE"),
-        "THIRD-PARTY-NOTICES.md": need(ROOT / "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.md"),
-        "LICENSE-LGPL-2.1": need(ROOT / "native" / "menu" / "third_party" / "LICENSE-LGPL-2.1", "LGPL licence text"),
+        "docs/MarthJukebox/README.md": need(ROOT / "README.md", "README.md"),
+        "docs/MarthJukebox/LICENSE": need(ROOT / "LICENSE", "LICENSE"),
+        "docs/MarthJukebox/THIRD-PARTY-NOTICES.md": need(ROOT / "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.md"),
+        "docs/MarthJukebox/LICENSE-LGPL-2.1": need(ROOT / "native" / "menu" / "third_party" / "LICENSE-LGPL-2.1", "LGPL licence text"),
     }
     sym_files = {"SKSE/Plugins/MarthJukebox.pdb": need(a.pdb, "PDB")}
 
     forbidden = (".wav", ".flac", ".mp3", ".ogg", ".xwm", ".ini", ".json", ".pdb")
     for name in main_files:
+        if "/" not in name and name != "MarthJukebox.esp":
+            sys.exit(f"refusing to package {name}: only the ESP may sit at the zip root")
         if name.lower().endswith(forbidden):
             sys.exit(f"refusing to package {name}: not allowed in the main zip")
 

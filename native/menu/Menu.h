@@ -15,7 +15,7 @@ namespace MJ::Menu
 	// framework is missing the page is simply not registered and the plugin runs headless on its INI.
 	void Register();
 
-	// The settings store the page edits. Call once after SettingsStore::Load() (the playback core owns the store).
-	// Until then the page shows "settings not loaded yet". The store must outlive the process; pass nullptr to detach.
+	// The settings store the page edits (the playback core owns it). Called from SKSEPluginLoad, BEFORE the INI is read:
+	// the page shows "settings not loaded yet" while SettingsStore::Revision() is 0. The store must outlive the process; pass nullptr to detach.
 	void SetStore(mj::config::SettingsStore* a_store);
 }

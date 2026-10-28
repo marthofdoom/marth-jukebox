@@ -6,6 +6,10 @@ on:
       - "native/**"
       - "VERSION"
       - "tools/package_release.py"
+      - "README.md"
+      - "THIRD-PARTY-NOTICES.md"
+      - "LICENSE"
+      - "assets/MarthJukebox.esp"
       - ".github/workflows/native.yml"
   workflow_dispatch:
 

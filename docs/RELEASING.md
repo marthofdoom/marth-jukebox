@@ -16,12 +16,13 @@ python3 -I tools/package_release.py --dll native/build/release/MarthJukebox.dll 
 Output (both zips are reproducible: fixed timestamps, sorted entries):
 
 - `MarthJukebox-<version>.zip` (players): `SKSE/Plugins/MarthJukebox.dll`, `MarthJukebox.esp` (from `assets/`),
-  and at the zip root `README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, `LICENSE-LGPL-2.1`. No PDB, no audio, no INI.
+  and under `docs/MarthJukebox/` `README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, `LICENSE-LGPL-2.1` (installed as
+  `Data/docs/MarthJukebox/`, so they cannot overwrite another mod's files). No PDB, no audio, no INI.
   Installable as-is by MO2 and Vortex, or extracted into `Data/`.
 - `MarthJukebox-<version>-symbols.zip`: `SKSE/Plugins/MarthJukebox.pdb` only, for symbolicating crash reports.
 
 The script exits non-zero if an input is missing or empty, if the ESP lacks a `TES4` header, or if a forbidden file type
-(audio, INI, JSON, PDB) would enter the main zip. The CI step then fails, so a green CI run on the release commit means
+(audio, INI, JSON, PDB) or any file other than the ESP at the zip root would enter the main zip. The CI step then fails, so a green CI run on the release commit means
 the zips exist. GitHub wraps an uploaded artifact in one more zip when you download it; unwrap once.
 
 ## Checklist

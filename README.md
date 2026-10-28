@@ -53,8 +53,10 @@ The release zip `MarthJukebox-<version>.zip` contains:
 ```
 SKSE/Plugins/MarthJukebox.dll
 MarthJukebox.esp
-README.md  LICENSE  THIRD-PARTY-NOTICES.md  LICENSE-LGPL-2.1
+docs/MarthJukebox/README.md  LICENSE  THIRD-PARTY-NOTICES.md  LICENSE-LGPL-2.1
 ```
+
+The documents sit in their own folder (`Data/docs/MarthJukebox/` after install) so they cannot overwrite another mod's files.
 
 **Mod Organizer 2:** install the zip with "Install a new mod from an archive" (or drag it into the mod list), enable it,
 and make sure `MarthJukebox.esp` is ticked in the plugins list. It is a light (ESL-flagged) plugin and does not use a
@@ -83,8 +85,9 @@ With no server address set, the plugin does nothing: all music stays vanilla and
 4. Under **Harmony server**, type the **Harmony server address** (for example `http://192.168.1.20:8080`; the exact host
    and port are those of your own server) and paste your **Personal key** (it is masked; tick **Show** to check it). Text
    fields are applied when you press Enter or click out of the field.
-5. Press **Test connection**. The result is written in plain language: connected (with the Harmony version and number of
-   sources), or what is wrong (not reachable, key rejected, server too old ...). The key is never printed in that message
+5. Press **Test connection**. The result is written in plain language: for example "Connected. Sources ready: your library,
+   YouTube Music.", or "Connected. This Harmony is older than 1.0.13: library only, update it for streaming.", or what is
+   wrong (not reachable, key rejected ...). The key is never printed in that message
    or in the log.
 6. Choose music. Either press a **preset** (under "Presets"), or set each environment yourself:
    - Pick a **Music source** for it: Vanilla, Genre, Artist, Playlist or Query.
@@ -227,7 +230,7 @@ In `MarthJukebox.ini` (game closed, or use the toggles under **Advanced** in the
 [Features]
 Retarget=1       ; 0 = never replace Skyrim's music (everything stays vanilla)
 Network=1        ; 0 = never use the network
-Menu=1           ; 0 = do not register the settings page
+Menu=1           ; 0 = the settings page is listed but disabled (set 1 and restart to use it)
 Flac=1           ; 0 = download WAV instead of FLAC
 RememberPlace=1  ; stored; resume is always on in 1.0
 ```
@@ -239,11 +242,12 @@ it resumes.
 
 ## Uninstall
 
-1. Quit the game.
-2. In the page, press **Clear cache** first if you want the downloaded music gone; or delete the cache folder yourself
-   afterwards (by default `Data/SKSE/Plugins/MarthJukebox/cache/`).
+1. If you want the downloaded music gone, press **Clear cache** in the page while the game is still running (or delete
+   the cache folder yourself afterwards; by default `Data/SKSE/Plugins/MarthJukebox/cache/`).
+2. Quit the game.
 3. Disable or remove the mod (MO2/Vortex), or delete `Data/SKSE/Plugins/MarthJukebox.dll` and `Data/MarthJukebox.esp`.
-4. Optionally delete what the plugin created: `Data/SKSE/Plugins/MarthJukebox.ini` (it holds your key), the folder
+4. Optionally delete what the plugin created: `Data/SKSE/Plugins/MarthJukebox.ini` and its copies `MarthJukebox.ini.bak` and `MarthJukebox.ini.unreadable*` (they all hold your
+   key in plain text), the folder
    `Data/SKSE/Plugins/MarthJukebox/`, the files `Data/Music/Harmony/slot_*.wav`, and the log `MarthJukebox.log`.
 
 The plugin makes no change to your save, to other mods' files or to Skyrim's data files: the music records are only
@@ -277,8 +281,8 @@ under `[General]`) to `debug` for details. The log never contains your key. When
 `PersonalKey` line from any INI you also send.
 
 **The settings page is not in the menu.** The SKSE Menu Framework is missing or too old (the log says
-`[menu] SKSE Menu Framework is not loaded` or names the missing export), or `Menu=0` is set. Edit
-`MarthJukebox.ini` by hand in the meantime (game closed).
+`[menu] SKSE Menu Framework is not loaded` or names the missing export); the page is then not listed at all. With `[Features] Menu=0` the page is still listed but only says it is switched
+off in the INI: set `Menu=1` and restart the game. Without the page, edit `MarthJukebox.ini` by hand (game closed).
 
 **Nothing changes, music stays vanilla.** Look in the log: `network inactive (no server URL)` = no server address set;
 `engine writes off` = `Retarget=0` or the `.noretarget` file exists; `DISABLED: MarthJukebox.esp is not in the load order`
@@ -307,8 +311,8 @@ open an issue at https://github.com/marthofdoom/marth-jukebox/issues with the lo
 
 ## Security
 
-- The **personal key is stored in plain text** in `MarthJukebox.ini` (it has to be sent as a header with every request).
-  Do not share or upload that file.
+- The **personal key is stored in plain text** in `MarthJukebox.ini` (it has to be sent as a header with every request),
+  and also in its copies `MarthJukebox.ini.bak` and `MarthJukebox.ini.unreadable*`. Do not share or upload any of them.
 - The key (and your requests) go **only to the server address you entered**. The plugin has no other network
   destination, no telemetry and no auto-update.
 - Use an **`https://`** server address whenever Harmony is reached from outside your own LAN or VPN. With plain `http://`
@@ -319,7 +323,7 @@ open an issue at https://github.com/marthofdoom/marth-jukebox/issues with the lo
 ## AI-assisted development
 
 This plugin was written largely by AI coding agents (Anthropic's Claude), working from specifications by the
-maintainer and with every change reviewed by a second model and tested in the game by a person. The source is public so
+maintainer. Each build was tested in the game by the maintainer, and the code was reviewed in a separate AI review pass. The source is public so
 you can read it.
 
 ## Licence and credits
