@@ -54,13 +54,17 @@ if(MJ_BUILD_TESTS)
     add_executable(mj_net_tests
         tests/net_tests.cpp
         net/HarmonyClient.cpp
+        # The pool workers are engine-free: linked here so their settings handling can be driven for real (R3-1).
+        pool/PoolWorker.cpp
+        pool/SlotFiller.cpp
+        slots/SlotWriter.cpp
     )
     target_compile_features(mj_net_tests PRIVATE cxx_std_23)
     target_include_directories(mj_net_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/shim
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    target_link_libraries(mj_net_tests PRIVATE spdlog::spdlog nlohmann_json::nlohmann_json winhttp ws2_32)
+    target_link_libraries(mj_net_tests PRIVATE mj_core spdlog::spdlog nlohmann_json::nlohmann_json winhttp ws2_32)
 
     # Optional AddressSanitizer build of the test exe (CI runs it as a separate, non-blocking step).
     option(MJ_TESTS_ASAN "Build mj_net_tests with MSVC /fsanitize=address" OFF)

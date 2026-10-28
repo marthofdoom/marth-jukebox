@@ -372,15 +372,18 @@ namespace MJ::Pool {
                 Net::Config c;
                 c.baseUrl     = ns.snap->global.serverUrl;
                 c.personalKey = ns.snap->global.personalKey;
-                const auto v  = SKSE::PluginDeclaration::GetSingleton()->GetVersion();
-                c.userAgent   = std::format("MarthJukebox/{}.{}.{}", v.major(), v.minor(), v.patch());
+                c.userAgent   = s.userAgent;
                 const auto r  = ns.client.Configure(c);
                 ns.clientOk   = r.Ok();
                 ns.cfgUrl     = c.baseUrl;
                 ns.cfgKey     = c.personalKey;
-                std::scoped_lock lk(s.mx);
-                s.netUrl = c.baseUrl;
-                s.netKey = c.personalKey;
+                {
+                    // ONLY these two assignments under the lock: SetConn below takes s.mx itself (review R3-1: holding
+                    // it here deadlocked the pool thread on any address Configure rejects, freezing the game thread).
+                    std::scoped_lock lk(s.mx);
+                    s.netUrl = c.baseUrl;
+                    s.netKey = c.personalKey;
+                }
                 ns.connected  = false;
                 if (!r.Ok()) {
                     SetConn(true, false, "The server address is not valid: " + r.message);
@@ -531,15 +534,24 @@ namespace MJ::Pool {
         // sources or streaming consent changed, the server/key changed, the network went off), or for the kill switch,
         // Clear cache or shutdown. Edits of other environments, pool size, toasts... let the refill go on (marth: "only
         // dump downloads if the changed setting invalidates them").
-        bool AbortWanted(const NetState& ns, const EnvPlan& a_ep, const std::stop_token& a_st) {
+        bool AbortWanted(NetState& ns, const EnvPlan& a_ep, const std::stop_token& a_st) {
             auto& s = S();
             if (a_st.stop_requested() || s.killFile.load()) return true;
-            const auto snap = s.store->Snapshot();
-            std::scoped_lock lk(s.mx);
-            if (s.clearCacheRequested) return true;
-            if (snap->revision == ns.snap->revision) return false;
-            return !mj::pool::DownloadStillValid(*snap, s.netUrl, s.netKey, a_ep.id, a_ep.fingerprint,
-                                                 ns.statusKnown && ns.status.servicesReported);
+            const auto snap  = s.store->Snapshot();
+            bool       valid = true;
+            {
+                std::scoped_lock lk(s.mx);
+                if (s.clearCacheRequested) return true;
+                if (snap->revision == ns.snap->revision) return false;
+                valid = mj::pool::DownloadStillValid(*snap, s.netUrl, s.netKey, a_ep.id, a_ep.fingerprint, s.conn.servicesReported);
+                if (valid) s.settingsDirty = false;  // handled right here (below), not again at the top of the loop
+            }
+            if (!valid) return true;
+            // Review R3-2: another environment changed (e.g. combat -> Vanilla, a new selector): apply it now (re-plan,
+            // profile PUT queued) instead of after every pick of this refill; this refill and its download go on.
+            spdlog::info("[pool] settings changed during the refill of {}; applying them now, the refill continues", a_ep.id);
+            OnSettings(ns);
+            return false;
         }
 
         void Reject(const std::string& a_env, const std::string& a_key, long long a_ms) {
@@ -886,9 +898,10 @@ namespace MJ::Pool {
         return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    void Start(mj::config::SettingsStore* a_store) {
+    void Start(mj::config::SettingsStore* a_store, std::string a_userAgent) {
         if (g_threads.pool.joinable()) return;
         S().store      = a_store;
+        S().userAgent  = std::move(a_userAgent);
         g_threads.pool = std::jthread(PoolThread);
         g_threads.slot = std::jthread(SlotThread);
     }
@@ -906,6 +919,10 @@ namespace MJ::Pool {
         const auto snap = s.store ? s.store->Snapshot() : nullptr;
         std::scoped_lock lk(s.mx);
         s.settingsDirty = true;
+        if (!snap) {  // before Start(): nothing runs yet (review R3-3)
+            s.poolCv.notify_all();
+            return;
+        }
         // Cancel the download in flight ONLY when it cannot be used any more: the server address or key changed, or
         // the network was switched off. Any other edit (a selector, a checkbox, typing in the menu) lets it finish; a
         // track whose selection changed meanwhile simply stays in the cache (Deck field log: 4 of 32 downloads were

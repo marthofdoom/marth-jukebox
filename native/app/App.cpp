@@ -359,7 +359,10 @@ namespace MJ::App {
             }
             Wake();
         });
-        Pool::Start(g_store.get());
+        {
+            const auto v = SKSE::PluginDeclaration::GetSingleton()->GetVersion();
+            Pool::Start(g_store.get(), std::format("MarthJukebox/{}.{}.{}", v.major(), v.minor(), v.patch()));
+        }
         if (!g_ui.th.joinable()) g_ui.th = std::jthread(UiThread);
     }
 

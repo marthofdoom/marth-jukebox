@@ -63,6 +63,7 @@ namespace MJ::Pool::detail {
         std::condition_variable_any slotCv;   // wakes the slot thread
 
         mj::config::SettingsStore*  store = nullptr;
+        std::string                 userAgent = "MarthJukebox";
         std::filesystem::path       cacheDir;           // set by the pool thread once settings are loaded
         std::uint64_t               capBytes = 0;
         bool                        cacheReady = false; // index loaded + revalidated

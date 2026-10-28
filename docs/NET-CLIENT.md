@@ -76,13 +76,17 @@ use them raw.
 The base URL may be `http://`; then the key travels in clear text. Fine on a LAN or inside a Tailnet
 (already encrypted); anywhere else use `https://`.
 
-#Response-header timeout: every request also sets `WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT` to its receive timeout.
+### Response-header timeout
+
+Every request also sets `WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT` to its receive timeout.
 WinHttpSetTimeouts does not cover the wait for the response headers, and Wine's WinHTTP defaults that wait to 21 s
 (`ACTUAL_DEFAULT_RECEIVE_RESPONSE_TIMEOUT` in dlls/winhttp/request.c; Windows: 90 s). A cold transcode holds the
 request for the whole `wait=` (30 s), so before this every such download failed under Proton after exactly 21 s with
 socket error 10060 (Steam Deck field log 2026-10-27; reproduced by `download_cold_transcode_long_hold` under Wine 10).
+Wine's 10060 is mapped to `kTimeout`. **That test only proves the fix under Wine/Proton**: on Windows (CI) it passes with
+or without the option, so the release checklist runs the CI-built `mj_net_tests.exe` under Wine/Proton (docs/RELEASING.md).
 
-## Download protocol
+### Download protocol
 
 1. Resolve `audio_url`: root-relative or relative URLs are appended to the base prefix; an absolute URL
    is accepted only for the **same scheme, host and port** as the base (the key must not leave the
