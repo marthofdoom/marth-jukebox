@@ -166,3 +166,17 @@ MJ_TEST(Audio_StopTokenCancels)
 	const auto d = ConvertToCanonicalWav(Fixture("golden_s16.flac"), dir.Path() / "no_such_dir" / "x.wav");
 	MJ_CHECK(!d.ok && !d.sourceError);
 }
+
+// Review R5-3: the start-up check of a known slot file's header.
+MJ_TEST(Audio_CanonicalSlotHeaderCheck)
+{
+	const auto golden = ReadAll(Fixture("golden_s16.wav"));
+	MJ_CHECK(IsCanonicalSlotHeader(golden, golden.size()));
+	MJ_CHECK(!IsCanonicalSlotHeader(golden, golden.size() + 2));        // size does not match the header
+	std::vector<std::uint8_t> zeros(64, 0);
+	MJ_CHECK(!IsCanonicalSlotHeader(zeros, golden.size()));               // zeroed by a power loss
+	auto mono = golden;
+	mono[22] = 1;                                                          // channels = 1: not what the slot accepts
+	MJ_CHECK(!IsCanonicalSlotHeader(mono, mono.size()));
+	MJ_CHECK(!IsCanonicalSlotHeader(std::span<const std::uint8_t>(golden.data(), 20), golden.size()));
+}

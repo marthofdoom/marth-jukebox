@@ -46,7 +46,9 @@ namespace mj::config
 	};
 	// `logProblems` = false: problems are only returned, never logged (the menu's 4 Hz status refresh and the pool
 	// thread, which logs each distinct problem once itself; Deck field log 2026-10-27: 110 repeated warnings).
-	[[nodiscard]] ProfileBuild BuildProfile(const Settings& settings, bool logProblems = true);
+	// `trimSilence`: add `"trim_silence": true` (Harmony cuts leading/trailing silence, so a combat track starts at once).
+	// Only for a server that knows the field (1.0.13+, status reports `services`): an older one rejects unknown keys.
+	[[nodiscard]] ProfileBuild BuildProfile(const Settings& settings, bool logProblems = true, bool trimSilence = false);
 
 	// Convenience wrapper: returns the JSON text, or an empty string when there is nothing to publish (every environment is
 	// Vanilla or invalid; Harmony requires at least one type). Problems are appended to `problems` and

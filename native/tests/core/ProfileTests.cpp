@@ -281,3 +281,16 @@ MJ_TEST(Profile_PathAndResolve)
 	r = ResolveEnvironment(s, "boss", "", b);
 	MJ_CHECK(r.typeName.empty() && r.setting == nullptr && !r.Active());
 }
+
+// Field #4: `trim_silence` only when asked (a server new enough to know it); never in the default build.
+MJ_TEST(Profile_TrimSilenceOnlyWhenAsked)
+{
+	Settings s = DefaultSettings();
+	s.environments["combat"].mode     = Mode::Query;
+	s.environments["combat"].selector = "epic battle";
+	const auto plain = BuildProfile(s, false);
+	const auto trim  = BuildProfile(s, false, true);
+	MJ_CHECK(!plain.json.empty() && plain.json.find("trim_silence") == std::string::npos);
+	MJ_CHECK(trim.json.find("\"trim_silence\": true") != std::string::npos);
+	MJ_CHECK(trim.publishedTypes == plain.publishedTypes);
+}

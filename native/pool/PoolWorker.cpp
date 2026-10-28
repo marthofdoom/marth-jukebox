@@ -279,7 +279,7 @@ namespace MJ::Pool {
                 ep.id                  = id;
                 const auto it          = slots.slotOf.find(id);
                 ep.slot                = it == slots.slotOf.end() ? -1 : it->second;
-                ep.poolSize            = e->poolSize;
+                ep.poolSize            = mj::pool::EffectivePoolSize(id, e->poolSize);  // combat/boss keep >= 5 (field #4)
                 const auto src         = mj::config::ChooseSources(snap, *e, list);
                 ep.sources             = src.sources;
                 ep.streamingDropped    = src.streamingDropped && ns.statusKnown;
@@ -301,7 +301,19 @@ namespace MJ::Pool {
                 if (ns.statusKnown && netOn && s.cacheReady) {
                     std::map<std::string, std::string> wanted;
                     for (const auto& [id, ep] : plan->envs) wanted[id] = ep.fingerprint;
-                    dropped = mj::pool::DropChangedPools(s.index, wanted);
+                    // Review R6-1: a changed selection / streaming consent also forgets the environment's recent tracks
+                    // and what its slot holds, so nothing of the old selection is replayed or repeated; the environment
+                    // goes vanilla until a track of the new selection lands.
+                    dropped = mj::pool::DropChangedSelections(s.index, wanted);
+                    for (const auto& d : dropped) {
+                        for (auto& sl : s.slots) {
+                            if (sl.owner != d) continue;
+                            sl.owner.clear();
+                            sl.contentKey.clear();
+                            sl.fresh  = false;
+                            sl.replay = false;
+                        }
+                    }
                     if (!dropped.empty()) MarkDirtyLocked();
                 }
                 for (auto& [id, ep] : plan->envs) {
@@ -314,7 +326,10 @@ namespace MJ::Pool {
                     if (!plan->envs.contains(id)) es.nowPlaying.clear();  // not playing from Harmony any more
                 s.plan = plan;
             }
-            for (const auto& d : dropped) spdlog::info("[pool] pool {} dropped (selector, sources or mode changed, or now Vanilla)", d);
+            for (const auto& d : dropped)
+                spdlog::warn("[pool] {}: selection, streaming consent or mode changed (or now Vanilla): its pool, recently played list and "
+                             "slot content are dropped; nothing of the old selection plays again, the environment stays vanilla until a "
+                             "track of the new selection is ready", d);
             std::size_t typesMapped = 0;
             for (const auto v : plan->typeSlot) typesMapped += v >= 0;
             spdlog::info("[plan] #{}: engine writes {}{}; {} environment(s), {} music type(s) mapped to slots", plan->gen,
@@ -471,7 +486,11 @@ namespace MJ::Pool {
                     ns.needProfile = false;
                     return true;
                 }
-                const auto r = ns.client.PutProfile(ns.snap->global.harmonyProfileName, ns.build.json, a_st);
+                // `trim_silence` (cuts leading/trailing silence, so a track starts at once) only on a server new enough to
+                // know the field: an older Harmony rejects unknown profile keys.
+                const auto json = ns.statusKnown && ns.status.servicesReported ? mj::config::BuildProfile(*ns.snap, false, true).json
+                                                                               : ns.build.json;
+                const auto r = ns.client.PutProfile(ns.snap->global.harmonyProfileName, json, a_st);
                 if (r.Ok()) {
                     ns.profileOk   = true;
                     ns.needProfile = false;
@@ -502,14 +521,14 @@ namespace MJ::Pool {
             return path.ends_with(".flac") ? "flac" : "wav";
         }
 
-        // Full decode check + the preview guard (DESIGN 8.8). True = acceptable.
-        bool ValidateFile(const fs::path& a_p, double a_expectedS, std::string& a_why, const std::stop_token& a_st) {
+        // Full decode check + the preview guard (DESIGN 8.8; with trim_silence the R5-4 rule). True = acceptable.
+        bool ValidateFile(const fs::path& a_p, double a_expectedS, std::string& a_why, const std::stop_token& a_st, bool a_trim) {
             const auto r = mj::pool::ConvertToCanonicalWav(a_p, {}, a_st);
             if (!r.ok) {
                 a_why = r.error;
                 return false;
             }
-            if (a_expectedS > 60.0 && r.durationS < 0.9 * a_expectedS) {
+            if (mj::pool::PreviewOrTruncated(r.durationS, a_expectedS, a_trim)) {
                 a_why = std::format("preview or truncated stream ({:.1f} s of {:.0f} s)", r.durationS, a_expectedS);
                 return false;
             }
@@ -582,10 +601,8 @@ namespace MJ::Pool {
                     const int  n   = pit == s.index.pools.end() ? 0 : static_cast<int>(pit->second.entries.size());
                     if (n >= ep.poolSize) continue;
                     if (const auto e = s.envs.find(id); e != s.envs.end() && now < e->second.backoffUntilMs) continue;
-                    // Empty pools first (their environment is Vanilla until one track is ready), combat/boss first
-                    // among equals (no warning before they start), then the largest gap.
-                    const bool hot   = id.starts_with("combat") || id.starts_with("boss");
-                    const int  score = (n == 0 ? 1000 : 0) + (hot ? 100 : 0) + (ep.poolSize - n);
+                    // Urgent pools first (empty, or combat/boss below 2), then combat/boss, then the largest gap.
+                    const int score = mj::pool::RefillScore(id, n, ep.poolSize);
                     if (score > best) {
                         best = score;
                         pick = &ep;
@@ -599,17 +616,20 @@ namespace MJ::Pool {
                 }
             }
             if (!pick) return false;
-            const EnvPlan ep   = *pick;  // copy: the plan pointer stays alive anyway
+            const EnvPlan ep     = *pick;  // copy: the plan pointer stays alive anyway
+            const bool    urgent = mj::pool::UrgentRefill(ep.id, have);
             {
-                std::scoped_lock lk(s.mx);  // what SettingsChanged() checks before cancelling this job
-                s.jobEnv = ep.id;
-                s.jobFp  = ep.fingerprint;
+                std::scoped_lock lk(s.mx);  // what SettingsChanged() and the slot thread check before cancelling this job
+                s.jobEnv    = ep.id;
+                s.jobFp     = ep.fingerprint;
+                s.jobUrgent = urgent;
             }
             struct JobClear {
                 ~JobClear() {
                     std::scoped_lock lk(S().mx);
                     S().jobEnv.clear();
                     S().jobFp.clear();
+                    S().jobUrgent = false;
                 }
             } jobClear;
             const int     need = ep.poolSize - have;
@@ -719,13 +739,29 @@ namespace MJ::Pool {
                     std::scoped_lock lk(s.mx);
                     kept = KeepSetLocked().contains(file);
                 }
-                if (fs::exists(path, ec) && (kept || ValidateFile(path, static_cast<double>(t.durationS), why, a_st))) {
+                const bool trim = ns.statusKnown && ns.status.servicesReported;  // the profile carries trim_silence then
+                if (fs::exists(path, ec) && (kept || ValidateFile(path, static_cast<double>(t.durationS), why, a_st, trim))) {
                     fs::last_write_time(path, fs::file_time_type::clock::now(), ec);  // LRU touch
                     good = true;
                     spdlog::info("[pool] {}: cache hit {} for a pick", ep.id, file);
                 } else if (!kept) {
-                    const auto dr = ns.client.DownloadAudio(t.audioUrl, path, static_cast<double>(t.durationS), a_st);
-                    if (dr.error == Net::Error::kCancelled) return true;
+                    // A pool that is not urgent gives a cold transcode 60 s, not 180 s: the server keeps transcoding,
+                    // so the pick comes back fast after a short wait, and an empty pool is never stuck behind it
+                    // (field #4: a dungeon pick held the only pool thread for 180 s while combat was dry).
+                    {
+                        std::scoped_lock lk(s.mx);
+                        s.netWhat = std::format("{} download ({}{})", ep.id, urgent ? "urgent" : "not urgent", ", pool " +
+                                                std::to_string(have) + "/" + std::to_string(ep.poolSize));
+                    }
+                    s.netSince    = SteadyMs();
+                    // With trim the client's header-level guard is skipped (expected 0): ValidateFile applies the trim rule.
+                    const auto dr = ns.client.DownloadAudio(t.audioUrl, path, trim ? 0.0 : static_cast<double>(t.durationS), a_st,
+                                                            urgent ? 0 : 60);
+                    s.netSince    = 0;
+                    if (dr.error == Net::Error::kCancelled) {
+                        spdlog::info("[pool] {}: download cancelled (settings, kill switch, an empty pool needs the thread, or shutdown)", ep.id);
+                        return true;
+                    }
                     if (dr.error == Net::Error::kTimeout || dr.error == Net::Error::kUnreachable) {
                         NetFailure(ns, dr, "download");
                         return true;
@@ -733,7 +769,8 @@ namespace MJ::Pool {
                     if (!dr.Ok()) {
                         why = std::format("{} ({})", Net::ErrorName(dr.error), dr.message);
                         if (dr.error == Net::Error::kPreviewOrTruncated || dr.error == Net::Error::kBadAudio) rejectMs = kRejectLongMs;
-                    } else if (ValidateFile(path, static_cast<double>(t.durationS), why, a_st)) {
+                        if (dr.error == Net::Error::kDeadline && !urgent) rejectMs = 3 * 60'000;  // still transcoding: back soon
+                    } else if (ValidateFile(path, static_cast<double>(t.durationS), why, a_st, trim)) {
                         good = true;
                         ToastSuccess(ns);
                     } else {
@@ -786,8 +823,9 @@ namespace MJ::Pool {
                     s.slotCv.notify_all();
                 }
                 ++added;
-                spdlog::info("[pool] {}: + {} ({} s, {:.1f} MB {}, {} ms)", ep.id, e.Display(), t.durationS, e.bytes / 1048576.0, cont,
-                             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+                spdlog::info("[pool] {}: + {} ({} s, {:.1f} MB {}, {} ms) pool {}/{}", ep.id, e.Display(), t.durationS, e.bytes / 1048576.0,
+                             cont, std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count(),
+                             have + added, ep.poolSize);
             }
             if (added == 0 && !ok.empty()) {
                 bool repeated = false;
@@ -810,6 +848,7 @@ namespace MJ::Pool {
         void PoolThread(std::stop_token a_st) {
             auto&    s = S();
             NetState ns;
+            Slots::LowerCurrentThreadPriority("pool");
             spdlog::info("[pool] thread started");
             // 1. Settings (file IO kept off the game thread).
             const bool okLoad = s.store->Load();
@@ -934,6 +973,26 @@ namespace MJ::Pool {
                                                                                 s.conn.servicesReported);
         if (!jobValid) s.jobStop.request_stop();  // signal only: a download in flight returns kCancelled at once
         s.poolCv.notify_all();
+    }
+
+    std::string PerfNow() {
+        auto&           s   = S();
+        const long long now = SteadyMs();
+        std::string     out;
+        if (const long long t = s.slotJobSince.load(); t > 0)
+            out = std::format("slot thread writing slot {:02} for {} ms", s.slotJobSlot.load(), now - t);
+        else if (const long long e = s.lastSlotJobEnd.load(); e > 0)
+            out = std::format("slot thread idle, last slot write took {} ms and ended {} ms ago", s.lastSlotJobMs.load(), now - e);
+        else
+            out = "slot thread idle";
+        std::string what;
+        {
+            std::scoped_lock lk(s.mx);
+            what = s.netWhat;
+        }
+        if (const long long n = s.netSince.load(); n > 0) out += std::format("; pool thread in a {} for {} ms (network-paced writes)", what, now - n);
+        else out += "; pool thread not downloading";
+        return out;
     }
 
     std::optional<std::string> PopToast() {

@@ -48,6 +48,21 @@ namespace mj::retarget
 	[[nodiscard]] SlotPlan AssignSlots(std::vector<std::string> active, const std::map<std::string, int>& previous,
 		int k = kSlotCount);
 
+	// Whether a type of environment `env` may point at a slot (field #4: never vanilla while the cache can play): the
+	// slot's file holds a track of `env` that is unplayed (fresh) or an earlier one placed while the pool was dry
+	// (replay), or it was played less than `graceMs` ago and its refill is due. Never while the slot is failing (the
+	// engine could not play it, or it cannot be filled).
+	[[nodiscard]] bool SlotReady(std::string_view owner, std::string_view env, bool fresh, bool replay, bool failing,
+		long long servedAtMs, long long nowMs, long long graceMs = 10'000);
+
+	// Review R5-1: what the slot thread does when a slot needs content and its pool is dry.
+	//   another cached track of the environment exists -> place it (replay rotation);
+	//   none, but the slot file already holds a track of this environment -> keep repeating it (NOT failing: repeating
+	//   the only cached track beats a vanilla gap in a fight, and no restore/re-bind flap);
+	//   none at all -> fail (the environment goes vanilla until a download lands).
+	enum class DryPoolAction : std::uint8_t { PlaceReplay, RepeatCurrent, Fail };
+	[[nodiscard]] DryPoolAction ChooseDryPoolAction(bool otherCachedCandidate, bool slotHoldsEnvTrack);
+
 	[[nodiscard]] std::string SlotFileName(int slot);  // "slot_07.wav"
 	[[nodiscard]] std::string SlotEditorId(int slot);  // "MJ_SLOT_07"
 }

@@ -759,6 +759,23 @@ namespace {
         alive("invalid address again");
     }
 
+    // Field #4: a non-urgent pick gets a shorter per-call 202 budget than Config::downloadDeadlineS.
+    void T_DownloadPerCallDeadline() {
+        const fs::path dir = TestDir();
+        Server s([&](const Req&, Conn& c, int) {
+            c.Send(Resp(202, "Accepted", R"({"status":"transcoding"})", "Retry-After: 1\r\n"));
+        });
+        HarmonyClient cl;
+        Config cfg = MakeConfig(s.Url());
+        cfg.downloadDeadlineS = 60;
+        Configured(cl, cfg);
+        const auto t0 = std::chrono::steady_clock::now();
+        const DownloadResult r = cl.DownloadAudio(kAudioUrl, dir / "d.wav", 100.0, {}, 2);
+        CHECK_ERR(r, Error::kDeadline);
+        CHECK(MsSince(t0) < 10000);
+        CHECK(r.message.find("2 s") != std::string::npos);
+    }
+
     void T_Download202Deadline() {
         const fs::path dir = TestDir();
         Server s([&](const Req&, Conn& c, int) {
@@ -1442,6 +1459,7 @@ int main() {
         { "search", T_Search },
         { "status_services", T_StatusServices },
         { "browse", T_Browse },
+        { "download_per_call_deadline", T_DownloadPerCallDeadline },
         { "download_cold_transcode_loops", T_DownloadColdTranscodeLoops },
         { "download_cold_transcode_long_hold", T_DownloadColdTranscodeLongHold },
         { "classify_failure", T_ClassifyFailure },

@@ -65,6 +65,7 @@ namespace MJ::Retarget {
         std::string                 g_published[kSlots];
         std::uint64_t               g_loggedPlan{ 0 };
 
+
         const char* StatusName(std::uint32_t a_v) {
             switch (a_v) {
             case 0: return "Inactive";
@@ -209,6 +210,83 @@ namespace MJ::Retarget {
             Pool::SetCatalogue(std::move(facts));
         }
 
+        // ---- Field diagnosis #3 (Deck: combat bound and ready, yet no combat play event and no music heard) ----
+        // At info level: every change of BSMusicManager::current (rate-limited), and one line per retargeted type that
+        // becomes current without producing a play event within 2 s. Read-only.
+        const RE::BSIMusicType* g_lastCurrent{ nullptr };
+        bool                    g_haveLastCurrent{ false };
+        int                     g_currentLines{ 0 };            // lines logged this session
+        constexpr int           kCurrentLinesFull = 200;        // then every 20th change
+        long long               g_curSinceMs{ -1 };             // when a bound type became current
+        std::size_t             g_curType{ ~std::size_t{ 0 } }; // its catalogue index
+        bool                    g_curPlayed{ false };           // a play event of its slot since then
+        std::vector<bool>       g_noPlayLogged;                 // per catalogue index, once per session
+
+        std::string QueueNames(const RE::BSMusicManager* a_mgr) {
+            std::string q;
+            for (std::uint32_t i = 0; a_mgr && i < a_mgr->musicQueue.size() && i < 4; ++i)
+                q += (q.empty() ? "" : ",") + Probe::TypeName(a_mgr->musicQueue[i]);
+            return q;
+        }
+
+        std::string EntryInfo(const RE::BSIMusicType* a_t, int a_slot) {
+            const std::uint32_t idx = a_t->currentTrackIndex;
+            const std::uint32_t n   = a_t->tracks.size();
+            if (idx >= n) return std::format("idx={}/{} (out of range)", idx, n);
+            const RE::BSIMusicTrack* e = a_t->tracks[idx];
+            const int                s = SlotOf(e);
+            if (s < 0) {
+                const auto* w = Probe::WrapperOf(e);
+                return std::format("idx={}/{} entry=vanilla({:08X}){}", idx, n, w ? w->GetFormID() : 0u,
+                                   a_slot >= 0 ? "  <- NOT our slot although the type is retargeted" : "");
+            }
+            const auto* st = static_cast<const RE::BGSMusicSingleTrack*>(g_wrapper[s]->track);
+            return std::format("idx={}/{} entry=slot {:02} handle=0x{:08X} trackStatus={}", idx, n, s, st->trackHandle.soundID,
+                               StatusName(st->trackStatus.underlying()));
+        }
+
+        void TickCurrentDiagnosis(const RE::BSMusicManager* a_mgr) {
+            const RE::BSIMusicType* cur = a_mgr ? a_mgr->current : nullptr;
+            const long long         now = Pool::SteadyMs();
+            if (!g_haveLastCurrent || cur != g_lastCurrent) {
+                g_haveLastCurrent = true;
+                g_lastCurrent     = cur;
+                std::size_t idx   = ~std::size_t{ 0 };
+                if (cur) {
+                    if (const auto it = g_typeIndex.find(cur); it != g_typeIndex.end()) idx = it->second;
+                }
+                const bool  known = idx != ~std::size_t{ 0 };
+                const int   slot  = known ? g_types[idx].bound : -1;
+                g_curType         = slot >= 0 ? idx : ~std::size_t{ 0 };
+                g_curSinceMs      = slot >= 0 ? now : -1;
+                g_curPlayed       = false;
+                ++g_currentLines;
+                if (g_currentLines <= kCurrentLinesFull || g_currentLines % 20 == 0) {
+                    if (!cur) {
+                        spdlog::info("[music] current: none  queue=[{}]", QueueNames(a_mgr));
+                    } else {
+                        spdlog::info("[music] current: {} {} typeStatus={} {}  queue=[{}]{}", Probe::TypeName(cur),
+                                     !known ? "(not a catalogued music type: never retargeted)"
+                                            : (slot >= 0 ? std::format("-> slot {:02} ({})", slot, g_types[idx].boundEnv) : std::string("(vanilla)")),
+                                     StatusName(cur->typeStatus.underlying()), EntryInfo(cur, slot), QueueNames(a_mgr),
+                                     g_currentLines == kCurrentLinesFull ? "  (further changes: every 20th)" : "");
+                    }
+                }
+            }
+            // A retargeted type is current but its slot produced no play event within 2 s: say what the engine shows.
+            if (g_curSinceMs >= 0 && !g_curPlayed && now - g_curSinceMs >= 2000 && g_curType < g_types.size()) {
+                if (g_noPlayLogged.size() < g_types.size()) g_noPlayLogged.resize(g_types.size(), false);
+                if (!g_noPlayLogged[g_curType]) {
+                    g_noPlayLogged[g_curType] = true;
+                    const auto& t             = g_types[g_curType];
+                    spdlog::warn("[music] {} is current (-> slot {:02} {}) but its slot gave no play event for 2 s: typeStatus={} {} "
+                                 "(logged once per type per session)",
+                                 t.name, t.bound, t.boundEnv, StatusName(t.type->typeStatus.underlying()), EntryInfo(t.type, t.bound));
+                }
+                g_curSinceMs = -1;
+            }
+        }
+
         // Play events: a slot wrapper is the current track of its (current) type and its sound handle or the index
         // changed (M0b: re-plays keep status Playing but get a new handle). Last-seen values survive while the slot
         // is not current, so a resume after combat (same handle, same index) is not an event.
@@ -241,6 +319,7 @@ namespace MJ::Retarget {
                             if (spdlog::should_log(spdlog::level::debug)) Probe::LogTrackHistory(t.type, "play event");
                             Pool::PostPlayEvent(s, t.boundEnv, h, idx);
                             if (p.checksLogged < 5) p.checkAtMs = Pool::SteadyMs() + 500;
+                            if (it->second == g_curType) g_curPlayed = true;
                         }
                     }
                 }
@@ -340,6 +419,9 @@ namespace MJ::Retarget {
         const auto  now    = Pool::SteadyMs();
         const auto* mgr    = RE::BSMusicManager::GetSingleton();
 
+        // Diagnosis first: it resets "played" on a type change, and a play event in the same tick must count (field #4:
+        // the "no play event for 2 s" warning fired although the PLAY line was logged in that very tick).
+        TickCurrentDiagnosis(mgr);
         TickPlay(mgr);
 
         if (plan && plan->gen != g_loggedPlan) {
@@ -360,7 +442,7 @@ namespace MJ::Retarget {
                 const int   s = plan->typeSlot[i];
                 const auto& v = views[s];
                 env           = plan->slotEnv[s];
-                const bool ready = v.owner == env && (v.fresh || (!v.failing && v.servedAtMs >= 0 && now - v.servedAtMs < kServedGraceMs));
+                const bool ready = mj::retarget::SlotReady(v.owner, env, v.fresh, v.replay, v.failing, v.servedAtMs, now, kServedGraceMs);
                 if (ready) desired = s;
                 else why = "slot not ready (pool empty or file not written)";
             } else {

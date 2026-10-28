@@ -65,6 +65,23 @@ namespace mj::retarget
 		return plan;
 	}
 
+	bool SlotReady(std::string_view owner, std::string_view env, bool fresh, bool replay, bool failing, long long servedAtMs,
+		long long nowMs, long long graceMs)
+	{
+		if (owner.empty() || owner != env || failing) {
+			return false;
+		}
+		return fresh || replay || (servedAtMs >= 0 && nowMs - servedAtMs < graceMs);
+	}
+
+	DryPoolAction ChooseDryPoolAction(bool otherCachedCandidate, bool slotHoldsEnvTrack)
+	{
+		if (otherCachedCandidate) {
+			return DryPoolAction::PlaceReplay;
+		}
+		return slotHoldsEnvTrack ? DryPoolAction::RepeatCurrent : DryPoolAction::Fail;
+	}
+
 	std::string SlotFileName(int slot)
 	{
 		char b[32];

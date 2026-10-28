@@ -396,3 +396,83 @@ MJ_TEST(Pool_MeasureDiskCountsCacheAndSlotFiles)
 	const auto d = MeasureDisk(cache, { dir.Path() / "slot_00.wav", dir.Path() / "slot_01.wav" });
 	MJ_CHECK(d.cacheBytes == 150 && d.cacheFiles == 2 && d.extraBytes == 30);
 }
+
+// Field #4: refill policy (combat/boss first and deeper; urgent before anything) and the replay rotation order.
+MJ_TEST(Pool_RefillPolicy)
+{
+	MJ_CHECK(IsHotEnvironment("combat") && IsHotEnvironment("combat.civil_war") && IsHotEnvironment("boss"));
+	MJ_CHECK(!IsHotEnvironment("explore") && !IsHotEnvironment("dungeon.cave") && !IsHotEnvironment("combatx"));
+	MJ_CHECK(EffectivePoolSize("combat", 3) == 5 && EffectivePoolSize("combat", 8) == 8 && EffectivePoolSize("explore", 3) == 3);
+	MJ_CHECK(UrgentRefill("explore", 0) && !UrgentRefill("explore", 1));
+	MJ_CHECK(UrgentRefill("combat", 1) && !UrgentRefill("combat", 2));
+	// An empty dungeon pool still beats a combat pool at 2 of 5; a combat pool at 1 beats a dungeon at 1 of 3.
+	MJ_CHECK(RefillScore("dungeon", 0, 3) > RefillScore("combat", 2, 5));
+	MJ_CHECK(RefillScore("combat", 1, 5) > RefillScore("dungeon", 1, 3));
+	// Never a non-urgent dungeon refill ahead of an urgent combat one.
+	MJ_CHECK(RefillScore("combat", 0, 5) > RefillScore("dungeon", 2, 3));
+	MJ_CHECK(RefillScore("explore", 3, 3) < RefillScore("explore", 2, 3));
+
+	PoolIndex idx;
+	AddRecent(idx, "combat", "local:a");
+	AddRecent(idx, "combat", "local:b");
+	AddRecent(idx, "combat", "local:c");
+	const auto order = ReplayOrder(idx, "combat", "local:c");
+	MJ_CHECK(order.size() == 2 && order[0] == "local:a" && order[1] == "local:b");
+	MJ_CHECK(ReplayOrder(idx, "explore", "").empty());
+}
+
+// Review R5-4: the preview guard with and without trim_silence.
+MJ_TEST(Pool_PreviewGuardWithTrim)
+{
+	MJ_CHECK(PreviewOrTruncated(30.0, 224.0, false));   // Qobuz preview
+	MJ_CHECK(PreviewOrTruncated(30.0, 224.0, true));    // still caught with trim on
+	MJ_CHECK(PreviewOrTruncated(190.0, 224.0, false));  // 85%: too short without trim
+	MJ_CHECK(PreviewOrTruncated(190.0, 224.0, true));   // 85% and 34 s short: still rejected with trim
+	MJ_CHECK(!PreviewOrTruncated(200.0, 224.0, true));  // 89%, 24 s of trimmed silence: accepted with trim
+	MJ_CHECK(!PreviewOrTruncated(210.0, 224.0, false)); // 94%: fine either way
+	MJ_CHECK(!PreviewOrTruncated(40.0, 59.0, false));   // tracks up to 60 s are not checked
+}
+
+// Review R6-1: replays and repeats follow the CURRENT selection and streaming consent.
+MJ_TEST(Pool_ReplayRespectsConsentAndSelection)
+{
+	MJ_CHECK(ServiceAllowedBySources("local", "library") && !ServiceAllowedBySources("ytmusic", "library"));
+	MJ_CHECK(ServiceAllowedBySources("ytmusic", "library,ytmusic") && ServiceAllowedBySources("local", "library,ytmusic"));
+	MJ_CHECK(!ServiceAllowedBySources("qobuz", "library,ytmusic"));  // Qobuz never without AllowQobuz
+	MJ_CHECK(ServiceAllowedBySources("qobuz", "library,ytmusic,qobuz"));
+	MJ_CHECK(ServiceAllowedBySources("ytmusic", "all") && !ServiceAllowedBySources("ytmusic", ""));
+
+	// Unchanged selection: the replay behaviour stays.
+	PoolIndex idx;
+	idx.pools["combat"].fingerprint = "fp-stream";
+	AddRecent(idx, "combat", "ytmusic:old1");
+	AddRecent(idx, "combat", "local:lib1");
+	AddRecent(idx, "combat", "ytmusic:now");
+	MJ_CHECK(ReplayOrder(idx, "combat", "ytmusic:now", "library,ytmusic").size() == 2);
+	MJ_CHECK(RepeatAllowed(idx, "combat", "combat", "ytmusic:now", "library,ytmusic"));
+
+	// The player UNTICKS streaming: same environment, sources become "library" (and the fingerprint changes).
+	// Even before the pool is dropped, no YouTube track is replayed or repeated.
+	const auto lib = ReplayOrder(idx, "combat", "ytmusic:now", "library");
+	MJ_CHECK(lib.size() == 1 && lib[0] == "local:lib1");
+	MJ_CHECK(!RepeatAllowed(idx, "combat", "combat", "ytmusic:now", "library"));
+	// After the drop the recent list is gone too: nothing of the old selection is left -> Fail (vanilla).
+	const auto dropped = DropChangedSelections(idx, { { "combat", "fp-library" } });
+	MJ_CHECK(dropped.size() == 1 && !idx.recent.contains("combat"));
+	MJ_CHECK(ReplayOrder(idx, "combat", "", "library").empty());
+	MJ_CHECK(!RepeatAllowed(idx, "combat", "combat", "local:lib1", "library"));
+
+	// A selector change with a dry pool: same outcome (nothing of the old selection replays).
+	PoolIndex sel;
+	sel.pools["explore"].fingerprint = "ambient";
+	AddRecent(sel, "explore", "local:a");
+	(void)DropChangedSelections(sel, { { "explore", "folk" } });
+	MJ_CHECK(ReplayOrder(sel, "explore", "", "library").empty() && !RepeatAllowed(sel, "explore", "explore", "local:a", "library"));
+	// Unchanged environments keep their recent lists.
+	PoolIndex keep;
+	keep.pools["explore"].fingerprint = "ambient";
+	AddRecent(keep, "explore", "local:a");
+	MJ_CHECK(DropChangedSelections(keep, { { "explore", "ambient" } }).empty() && IsRecent(keep, "explore", "local:a"));
+	// A slot owned by another environment, or with unknown content, never repeats.
+	MJ_CHECK(!RepeatAllowed(keep, "explore", "combat", "local:a", "library") && !RepeatAllowed(keep, "explore", "explore", "", "library"));
+}

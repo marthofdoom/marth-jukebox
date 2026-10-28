@@ -1081,7 +1081,8 @@ namespace MJ::Net {
         }
 
         DownloadResult DoDownload(std::string_view a_audioUrl, const fs::path& a_dest, double a_expectedS,
-                                  const std::stop_token& a_st) {
+                                  const std::stop_token& a_st, int a_deadlineS) {
+            const int deadlineS = a_deadlineS > 0 ? (std::min)(a_deadlineS, 3600) : cfg.downloadDeadlineS;
             ArmStop();  // the stop callback below only signals; it never calls WinHTTP
             std::stop_callback cb(a_st, [h = stopEvt] { ::SetEvent(h); });
             DownloadResult     out;
@@ -1094,9 +1095,9 @@ namespace MJ::Net {
 
             std::string target, err;
             if (!ResolveAudioUrl(a_audioUrl, target, err)) return fail(Error::kBadResponse, err);
-            if (target.find("wait=") == std::string::npos) {
-                target += (target.find('?') == std::string::npos ? "?wait=" : "&wait=") + std::to_string(cfg.waitS);
-            }
+            // `wait=` is set per request below: never longer than what is left of the deadline (review R5-5).
+            const bool ownWait = target.find("wait=") == std::string::npos;
+            const std::string baseTarget = target;
 
             PartGuard guard;
             guard.path = a_dest;
@@ -1106,11 +1107,16 @@ namespace MJ::Net {
                 fs::remove(guard.path, ec);
             }
 
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(cfg.downloadDeadlineS);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(deadlineS);
             const int  recvMs   = (std::max)(cfg.receiveTimeoutMs, (cfg.waitS + 10) * 1000);
 
             while (true) {
                 if (Cancelled(a_st)) return fail(Error::kCancelled, "cancelled");
+                if (ownWait) {
+                    const auto left = std::chrono::duration_cast<std::chrono::seconds>(deadline - std::chrono::steady_clock::now()).count();
+                    const int  w    = static_cast<int>((std::max<long long>)(0, (std::min<long long>)(cfg.waitS, left)));
+                    target          = baseTarget + (baseTarget.find('?') == std::string::npos ? "?wait=" : "&wait=") + std::to_string(w);
+                }
                 const auto t0 = std::chrono::steady_clock::now();
                 Exchange   ex;
                 Result     r = Open(L"GET", target, nullptr, L"*/*", recvMs, a_st, ex);
@@ -1129,7 +1135,7 @@ namespace MJ::Net {
                     waitS     = (std::min)((std::max)(waitS, 1), 30);
                     const auto now = std::chrono::steady_clock::now();
                     if (now + std::chrono::seconds(waitS) > deadline) {
-                        return fail(Error::kDeadline, std::format("still transcoding after {} s", cfg.downloadDeadlineS));
+                        return fail(Error::kDeadline, std::format("still transcoding after {} s", deadlineS));
                     }
                     std::string sm;
                     if (const Error se = SleepOrCancel(waitS * 1000, a_st, sm); se != Error::kOk) return fail(se, sm);
@@ -1343,8 +1349,8 @@ namespace MJ::Net {
     BrowseResult HarmonyClient::Playlists(std::stop_token a_st) { return impl_->DoBrowse("/api/playlists", "playlists", false, a_st); }
 
     DownloadResult HarmonyClient::DownloadAudio(std::string_view a_audioUrl, const fs::path& a_destFile,
-                                                double a_expectedDurationS, std::stop_token a_st) {
-        return impl_->DoDownload(a_audioUrl, a_destFile, a_expectedDurationS, a_st);
+                                                double a_expectedDurationS, std::stop_token a_st, int a_deadlineS) {
+        return impl_->DoDownload(a_audioUrl, a_destFile, a_expectedDurationS, a_st, a_deadlineS);
     }
 
 }  // namespace MJ::Net

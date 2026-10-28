@@ -5,7 +5,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -64,15 +66,33 @@ namespace mj::pool
 #endif
 		}
 
-		// fflush + flush the OS buffers to the device, then close. False on any failure.
+		thread_local bool t_durable = true;  // set by ConvertToCanonicalWav for this call
+
+		// Paced writing for non-durable outputs: 2 ms pause per 4 MiB written.
+		thread_local std::uint64_t t_sincePause = 0;
+		void Pace(std::size_t n)
+		{
+			if (t_durable) {
+				return;
+			}
+			t_sincePause += n;
+			if (t_sincePause >= (4u << 20)) {
+				t_sincePause = 0;
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			}
+		}
+
+		// fflush + (durable only) flush the OS buffers to the device, then close. False on any failure.
 		bool FlushAndClose(File& f)
 		{
 			bool ok = std::fflush(f.get()) == 0;
+			if (t_durable) {
 #if defined(_WIN32)
-			ok = ok && _commit(_fileno(f.get())) == 0;
+				ok = ok && _commit(_fileno(f.get())) == 0;
 #else
-			ok = ok && fsync(fileno(f.get())) == 0;
+				ok = ok && fsync(fileno(f.get())) == 0;
 #endif
+			}
 			std::FILE* raw = f.release();
 			ok             = (std::fclose(raw) == 0) && ok;
 			return ok;
@@ -80,7 +100,9 @@ namespace mj::pool
 
 		bool WriteAll(std::FILE* f, const void* p, std::size_t n)
 		{
-			return n == 0 || std::fwrite(p, 1, n, f) == n;
+			const bool ok = n == 0 || std::fwrite(p, 1, n, f) == n;
+			Pace(n);
+			return ok;
 		}
 
 		// A failure of the SOURCE file (unreadable, not decodable, wrong format): the caller drops that track.
@@ -327,6 +349,19 @@ namespace mj::pool
 		return b;
 	}
 
+	bool IsCanonicalSlotHeader(std::span<const std::uint8_t> head, std::uint64_t fileSize)
+	{
+		if (head.size() < 44 || fileSize < 44) {
+			return false;
+		}
+		WavLayout   L;
+		std::string err;
+		if (!ParseWav(head.first(44), fileSize, L, err) || L.dataOffset != 44 || L.dataBytes != fileSize - 44) {
+			return false;
+		}
+		return EnginePlayable(L.fmt, err);
+	}
+
 	bool EnginePlayable(const PcmFormat& f, std::string& why)
 	{
 		if (f.bits != 16) {
@@ -344,8 +379,10 @@ namespace mj::pool
 		return true;
 	}
 
-	ConvertResult ConvertToCanonicalWav(const fs::path& src, const fs::path& dst, std::stop_token st)
+	ConvertResult ConvertToCanonicalWav(const fs::path& src, const fs::path& dst, std::stop_token st, bool durable)
 	{
+		t_durable    = durable;
+		t_sincePause = 0;
 		ConvertResult r;
 		std::error_code ec;
 		const auto      size = fs::file_size(src, ec);

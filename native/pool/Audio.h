@@ -40,6 +40,11 @@ namespace mj::pool
 	// The 44-byte canonical header for `dataBytes` of PCM in format `f`.
 	[[nodiscard]] std::array<std::uint8_t, 44> CanonicalWavHeader(const PcmFormat& f, std::uint32_t dataBytes);
 
+	// Review R5-3: true when `head` (the first 44+ bytes of a file of `fileSize` bytes) is the canonical header this plugin
+	// writes for that size: RIFF/WAVE, fmt PCM, data at offset 44 with dataBytes = fileSize - 44, and engine-playable.
+	// A slot file zeroed by a power loss (written without fsync) fails this.
+	[[nodiscard]] bool IsCanonicalSlotHeader(std::span<const std::uint8_t> head, std::uint64_t fileSize);
+
 	// What the slot path was proven with in the field: 16-bit PCM, stereo, 44100 Hz. Nothing else.
 	bool EnginePlayable(const PcmFormat& f, std::string& why);
 
@@ -62,6 +67,8 @@ namespace mj::pool
 	// FLAC: the decoded frame count must equal STREAMINFO's total (a truncated or corrupt stream fails).
 	// Anything longer than 2 hours is refused (Harmony cuts its sources there).
 	// The stop token is checked between blocks; a stop gives ok=false, error "cancelled".
+	// `durable` = false: the output is not forced to disk (no fsync; close only) and the writing pauses 2 ms after every
+	// 4 MiB, for recreatable files written next to a running game (slot files).
 	ConvertResult ConvertToCanonicalWav(const std::filesystem::path& src, const std::filesystem::path& dst,
-		std::stop_token st = {});
+		std::stop_token st = {}, bool durable = true);
 }

@@ -302,6 +302,108 @@ namespace mj::pool
 		return d;
 	}
 
+	bool PreviewOrTruncated(double decodedS, double expectedS, bool trimSilence)
+	{
+		if (!(expectedS > 60.0) || decodedS >= 0.9 * expectedS) {
+			return false;
+		}
+		return !trimSilence || expectedS - decodedS > 30.0;
+	}
+
+	bool IsHotEnvironment(std::string_view envId)
+	{
+		auto group = envId.substr(0, envId.find('.'));
+		return group == "combat" || group == "boss";
+	}
+
+	int EffectivePoolSize(std::string_view envId, int poolSize)
+	{
+		return IsHotEnvironment(envId) ? std::max(poolSize, kHotPoolMin) : poolSize;
+	}
+
+	bool UrgentRefill(std::string_view envId, int have)
+	{
+		return have <= 0 || (IsHotEnvironment(envId) && have < 2);
+	}
+
+	int RefillScore(std::string_view envId, int have, int target)
+	{
+		return (UrgentRefill(envId, have) ? 1000 : 0) + (IsHotEnvironment(envId) ? 100 : 0) + std::max(0, target - have);
+	}
+
+	bool ServiceAllowedBySources(std::string_view service, std::string_view sources)
+	{
+		if (sources == "all") {
+			return true;
+		}
+		if (sources.empty()) {
+			sources = "library";
+		}
+		const std::string_view want = service == "local" ? std::string_view("library") : service;
+		while (!sources.empty()) {
+			const auto comma = sources.find(',');
+			const auto part  = sources.substr(0, comma);
+			if (part == want) {
+				return true;
+			}
+			if (comma == std::string_view::npos) {
+				break;
+			}
+			sources.remove_prefix(comma + 1);
+		}
+		return false;
+	}
+
+	namespace
+	{
+		std::string_view ServiceOf(std::string_view key)
+		{
+			const auto c = key.find(':');
+			return c == std::string_view::npos ? std::string_view() : key.substr(0, c);
+		}
+	}
+
+	std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude, std::string_view sources)
+	{
+		std::vector<std::string> out;
+		if (const auto r = index.recent.find(envId); r != index.recent.end()) {
+			for (const auto& k : r->second) {  // oldest first
+				if (k != exclude && ServiceAllowedBySources(ServiceOf(k), sources)) {
+					out.push_back(k);
+				}
+			}
+		}
+		return out;
+	}
+
+	bool RepeatAllowed(const PoolIndex& index, std::string_view envId, std::string_view owner, std::string_view contentKey,
+		std::string_view sources)
+	{
+		if (owner != envId || contentKey.empty() || !ServiceAllowedBySources(ServiceOf(contentKey), sources)) {
+			return false;
+		}
+		if (IsRecent(index, envId, contentKey)) {
+			return true;
+		}
+		if (const auto p = index.pools.find(envId); p != index.pools.end()) {
+			for (const auto& e : p->second.entries) {
+				if (e.Key() == contentKey) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	std::vector<std::string> DropChangedSelections(PoolIndex& index, const std::map<std::string, std::string>& wanted)
+	{
+		auto dropped = DropChangedPools(index, wanted);
+		for (const auto& env : dropped) {
+			index.recent.erase(env);
+		}
+		return dropped;
+	}
+
 	bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key)
 	{
 		const auto it = index.recent.find(envId);

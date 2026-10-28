@@ -7,6 +7,7 @@
 #include "probe/Probe.h"
 #include "retarget/Retarget.h"
 #include "app/AppHost.h"
+#include "pool/Pool.h"
 
 namespace MJ::Probe {
 
@@ -255,8 +256,11 @@ namespace MJ::Probe {
             // Gap between two consecutive watcher tasks (nominally 250 ms). Logged only when
             // > 400 ms: the main thread did not run SKSE tasks for that long.
             if (g_prevTickMs >= 0 && tickMs - g_prevTickMs > 400) {
-                spdlog::log(tickMs - g_prevTickMs > 5000 ? spdlog::level::warn : spdlog::level::debug, "[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}",
-                             tickMs - g_prevTickMs, g_prevTickMs, tickMs, TypeName(s.current), s.index, StatusName(s.typeStatus));
+                const bool big = tickMs - g_prevTickMs > 5000;
+                spdlog::log(big ? spdlog::level::warn : spdlog::level::debug,
+                            "[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}{}{}",
+                            tickMs - g_prevTickMs, g_prevTickMs, tickMs, TypeName(s.current), s.index, StatusName(s.typeStatus),
+                            big ? " | ours: " : "", big ? MJ::Pool::PerfNow() : std::string());
             }
             g_prevTickMs = tickMs;
             LogNowPlaying(s);
