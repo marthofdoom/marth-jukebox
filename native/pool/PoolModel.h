@@ -124,6 +124,10 @@ namespace mj::pool
 	// thread. target = max(base, ceil(avgDownloadS / avgTrackS) + 2), at most 8; `base` when nothing is known yet.
 	[[nodiscard]] int AdaptivePoolSize(int base, double avgDownloadS, double avgTrackS);
 
+	// The menu text when Harmony answers `no_tracks` (the environment stays vanilla, retried in 10 min). With library-only
+	// sources (streaming unticked, e.g. the 1.0.1 first-run defaults) it tells the player what to do.
+	[[nodiscard]] std::string NoTracksProblem(std::string_view sources);
+
 	// Review F5-2: the cache cap. Adaptive growth beyond `base` only while the pooled bytes stay below 75% of the cap;
 	// a refill is allowed below the cap, and an URGENT one may exceed it by one track (eviction of unprotected files
 	// still runs afterwards), so a full cache never blocks the pool that is about to run dry.

@@ -294,3 +294,23 @@ MJ_TEST(Profile_TrimSilenceOnlyWhenAsked)
 	MJ_CHECK(trim.json.find("\"trim_silence\": true") != std::string::npos);
 	MJ_CHECK(trim.publishedTypes == plain.publishedTypes);
 }
+
+// 1.0.1: the shipped town default (ytmusic artist id, streaming off) is published with a warning (it yields no tracks
+// with sources=library); a typed artist name without a picked id gets a clear instruction instead of a service error.
+MJ_TEST(Profile_FirstRunDefaultsAndNameOnlyArtist)
+{
+	const auto b = BuildProfile(FirstRunSettings(), false);
+	MJ_CHECK(b.publishedTypes.contains("explore") && b.publishedTypes.contains("town"));
+	bool warned = false;
+	for (const auto& p : b.problems) warned |= p.environment == "town" && p.severity == ProblemSeverity::Warning;
+	MJ_CHECK(warned);
+
+	Settings s = DefaultSettings();
+	s.environments["town"].mode     = Mode::Artist;
+	s.environments["town"].selector = "Per-Olov Kindgren";  // typed, no suggestion picked
+	const auto n = BuildProfile(s, false);
+	MJ_CHECK(!n.publishedTypes.contains("town"));
+	bool clear = false;
+	for (const auto& p : n.problems) clear |= p.environment == "town" && p.message.find("pick the artist from the suggestions") != std::string::npos;
+	MJ_CHECK(clear);
+}

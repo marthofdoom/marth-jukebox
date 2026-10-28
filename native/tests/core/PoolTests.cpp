@@ -598,3 +598,11 @@ MJ_TEST(Pool_CapAndPreemptRules)
 	PopStaleColdPicks(q, "newer");
 	MJ_CHECK(q.empty());
 }
+
+// 1.0.1 default state: streaming unticked -> sources=library -> Harmony answers no_tracks -> vanilla with this text
+// (a 10-minute retry, not an error loop).
+MJ_TEST(Pool_NoTracksTextForTheDefaultState)
+{
+	MJ_CHECK(NoTracksProblem("library") == "No matching tracks in your library: tick Allow streaming to fetch from YouTube Music");
+	MJ_CHECK(NoTracksProblem("library,ytmusic") == "No matching tracks (try another selection)");
+}

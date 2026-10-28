@@ -136,6 +136,12 @@ namespace mj::config
 			case Mode::Artist:
 			case Mode::Playlist: {
 				const char* what = e.mode == Mode::Artist ? "artist" : "playlist";
+				if (e.service.empty() && e.id.empty()) {
+					// A typed name without a pick: Harmony's selectors need the service id (game-source.md), so say what to do.
+					ctx.Add(id, ProblemSeverity::Error,
+						std::string("pick the ") + what + " from the suggestions (a typed name alone has no id); environment left out of the profile");
+					return false;
+				}
 				if (e.service != "local" && e.service != "ytmusic") {
 					ctx.Add(id, ProblemSeverity::Error,
 						std::string(what) + " service must be 'local' or 'ytmusic' (Qobuz is not supported); environment left out of the profile");

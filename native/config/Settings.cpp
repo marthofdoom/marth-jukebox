@@ -489,6 +489,22 @@ namespace mj::config
 		return Settings{};
 	}
 
+	Settings FirstRunSettings()
+	{
+		Settings s = DefaultSettings();
+		auto&    ex = s.environments["explore"];
+		ex.mode           = Mode::Query;
+		ex.selector       = "Brass Fantasy Adventure";
+		ex.allowStreaming = false;
+		auto& town          = s.environments["town"];
+		town.mode           = Mode::Artist;
+		town.selector       = "Per-Olov Kindgren";
+		town.service        = "ytmusic";
+		town.id             = "UCL5frAZoI4rtafCi2BqPDAw";
+		town.allowStreaming = false;
+		return s;
+	}
+
 	bool NetworkActive(const Settings& s)
 	{
 		return s.global.features.network && !s.global.serverUrl.empty();
@@ -826,7 +842,9 @@ namespace mj::config
 			usable = false;
 			unusableExisting = true;
 		} else if (!exists) {
-			Log(spdlog::level::info, "no settings file yet; using defaults (nothing is written until a setting changes)");
+			// Fresh install: the 1.0.1 example environments (written with the first save). Never applied to an existing file.
+			loaded = FirstRunSettings();
+			Log(spdlog::level::info, "no settings file yet; using the first-run defaults (nothing is written until a setting changes)");
 		} else {
 			std::ifstream in(iniPath_, std::ios::binary);
 			if (!in) {

@@ -116,6 +116,13 @@ namespace mj::config
 	// ---- pure functions ----------------------------------------------------------------------------
 	[[nodiscard]] Settings DefaultSettings();
 
+	// 1.0.1 (marth): the settings of a FRESH install, used only when no settings file exists yet. Two example
+	// environments, both with streaming OFF (liability decision): exploration = Query "Brass Fantasy Adventure", town =
+	// Artist "Per-Olov Kindgren" (YouTube Music id from the menu's suggestions). They play nothing until the player ticks
+	// "Allow streaming" (or has matching library tracks), and nothing touches the network before ServerUrl is set.
+	// An existing INI is never changed: an environment without a section stays Vanilla.
+	[[nodiscard]] Settings FirstRunSettings();
+
 	// Clamp / validate in place. Every correction appends one line to `diag` (never the key or URL value).
 	void Sanitize(Settings& s, Diagnostics& diag);
 

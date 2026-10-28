@@ -745,8 +745,7 @@ namespace MJ::Pool {
                     if (nr.error == Net::Error::kBadKey) QueueToast(ns.toast.OnAuthFailure(SteadyMs()));
                     return false;
                 case Net::Error::kNoTracks:
-                    EnvBackoff(ep.id, 600'000, ep.sources == "library" ? "No matching tracks in your library (try another genre or allow streaming)"
-                                                                      : "No matching tracks (try another selection)");
+                    EnvBackoff(ep.id, 600'000, mj::pool::NoTracksProblem(ep.sources));
                     spdlog::warn("[pool] {}: Harmony has no tracks for this selection (sources={}); retry in 10 min", ep.id, ep.sources);
                     return true;
                 case Net::Error::kUnknownType:
