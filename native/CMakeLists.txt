@@ -6,7 +6,11 @@
 # declaration is add_commonlibsse_plugin's default (Address Library version independence), exactly as MFO ships it: one DLL for 1.5.97 and 1.6.1170.
 cmake_minimum_required(VERSION 3.21)
 
-project(MarthJukebox VERSION 0.1.0 LANGUAGES CXX)
+# The plugin version is the single line in the repository-root VERSION file (tools/package_release.py names the zips from it).
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" MJ_VERSION LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+
+project(MarthJukebox VERSION ${MJ_VERSION} LANGUAGES CXX)
 
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)

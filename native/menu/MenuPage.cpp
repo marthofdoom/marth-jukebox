@@ -564,7 +564,7 @@ namespace MJ::Menu
 				}
 				UI::EndCombo();
 			}
-			Colored(kDim, "The log is MarthJukebox.log next to the plugin. The page itself is switched off with [Features] Menu=0 in the INI.");
+			Colored(kDim, "The log (MarthJukebox.log) is in the SKSE log folder (see the README). The page itself is switched off with [Features] Menu=0 in the INI.");
 		}
 
 		// ---- the registered callbacks ---------------------------------------------------------------------------
