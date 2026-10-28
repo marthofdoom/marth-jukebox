@@ -48,6 +48,12 @@ namespace MJ::Pool::detail {
         std::uint64_t prepBytes = 0;
         int           renameAttempts = 0;
         int           deniedAttempts = 0;
+        // Flood guard (Deck field log): play events of this slot within the last few seconds; a slot the engine skips
+        // instantly produces one per tick. When it trips, the slot is disabled until the settings change or a restart.
+        std::deque<long long> recentEvents;
+        bool          disabled = false;
+        std::uint64_t disabledAtRevision = 0;
+        std::uint64_t ignoredEvents = 0;
     };
 
     struct PlayEvent {

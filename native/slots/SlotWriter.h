@@ -37,9 +37,14 @@ namespace MJ::Slots {
         std::uint64_t bytes = 0;
     };
 
-    // Reads the ownership manifest (once) and returns the slots whose file on disk still has the recorded size and
-    // a recorded track (A-F7: they need no rewrite at start). Worker only.
+    // Reads the ownership manifest (once per process) and returns the slots whose file on disk still has the recorded size
+    // and a recorded track (A-F7: they need no rewrite at start). Worker only.
     std::map<int, SlotRecord> LoadManifest();
+
+    // Plugin load (game thread, BEFORE the engine initialises; the only file IO done there): creates every missing
+    // slot_NN.wav as 1 s of silence and records it in the manifest, so the game knows all slot files from its start
+    // (Deck field log: slot files created during the session were never played). Never overwrites an existing file.
+    void EnsurePlaceholders();
 
     struct PrepResult {
         bool          ok = false;

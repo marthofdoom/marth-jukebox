@@ -17,6 +17,13 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
 2. Expect in the log: `[net] network inactive (no server URL): everything stays Vanilla`, `[plan] ... engine writes off`,
    no `[retarget] ... -> slot` line, no `[net] GET` line. Vanilla music plays.
 
+## 1b. Slot files at start (Deck field log 2026-10-27)
+1. First start after installing: the log says `[slots] 24 slot file(s) did not exist at game start (...): created 24 silent
+   placeholder(s)`; every later start: `[slots] all 24 slot files existed at game start`.
+2. At the first Harmony track of each environment, `[retarget] slot NN play check +500 ms: slot still current=true handle
+   now=<same as the event> inner trackStatus=Playing`. A line ending `<- NOT playing` or a `[slots] slot NN ... cannot play`
+   error means the game could not play the file: keep the log.
+
 ## 2. Configure (menu or INI) (acceptance 3)
 1. Set ServerUrl + PersonalKey, and: `explore` = Genre (a genre the library really has; the picker lists them),
    `combat` = Query `epic battle music orchestral` with streaming ON, `dungeon` = Artist from the library.

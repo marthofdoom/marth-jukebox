@@ -195,6 +195,11 @@ active environment (44.1 kHz 16-bit stereo), on top of the cache.
 
 The plugin never overwrites a slot file that it did not create itself.
 
+The game only plays slot files that already existed when it started. So the first time the plugin loads it creates all
+24 slot files as one second of silence (about 4 MB together); they are replaced by real tracks while you play. If a slot
+file cannot be played (the game skips it again and again), that environment goes back to vanilla music, the page says
+why, and the log has the details; restart the game or change that environment's settings to try again.
+
 ## Performance and threading
 
 - **No network or disk access happens on the game thread.** Downloads, decoding, file writes, the connection test and

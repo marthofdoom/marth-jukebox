@@ -121,54 +121,70 @@ namespace MJ::Slots {
         return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
     }
 
+    namespace {
+        // Caller holds g_mx. Reads slots.json into g_manifest once per process.
+        void ReadManifestOnceLocked() {
+            if (g_loaded) return;
+            g_loaded         = true;
+            const fs::path p = ManifestPath();
+            HANDLE h = ::CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h == INVALID_HANDLE_VALUE) {
+                spdlog::info("[slots] no slot manifest yet ({}): the plugin has not written a slot file", Utf8(p));
+                return;
+            }
+            std::string   text;
+            LARGE_INTEGER sz{};
+            if (::GetFileSizeEx(h, &sz) && sz.QuadPart > 0 && sz.QuadPart < (1 << 20)) {
+                text.resize(static_cast<std::size_t>(sz.QuadPart));
+                DWORD got = 0;
+                if (!::ReadFile(h, text.data(), static_cast<DWORD>(text.size()), &got, nullptr)) got = 0;
+                text.resize(got);
+            }
+            ::CloseHandle(h);
+            const auto j = nlohmann::json::parse(text, nullptr, false);
+            if (j.is_discarded() || !j.is_object() || !j.contains("slots") || !j["slots"].is_object()) {
+                spdlog::error("[slots] slot manifest {} is unreadable: every existing slot file is treated as NOT ours (delete the "
+                              "slot_NN.wav files in Data\\Music\\Harmony to let the plugin use them again)",
+                              Utf8(p));
+                return;
+            }
+            auto str = [](const nlohmann::json& a_o, const char* a_k) {
+                const auto it = a_o.find(a_k);
+                return it != a_o.end() && it->is_string() ? it->get<std::string>() : std::string();
+            };
+            for (const auto& [name, rec] : j["slots"].items()) {
+                Entry e;
+                if (rec.is_array()) {  // version 1: sizes only
+                    for (const auto& v : rec)
+                        if (v.is_number_unsigned()) e.sizes.insert(v.get<std::uint64_t>());
+                } else if (rec.is_object()) {
+                    if (const auto it = rec.find("sizes"); it != rec.end() && it->is_array()) {
+                        for (const auto& v : *it)
+                            if (v.is_number_unsigned()) e.sizes.insert(v.get<std::uint64_t>());
+                    }
+                    e.env  = str(rec, "env");
+                    e.key  = str(rec, "key");
+                    e.file = str(rec, "file");
+                    if (!mj::pool::IsCacheFileName(e.file)) e.file.clear();
+                }
+                g_manifest[name] = e;
+            }
+        }
+
+        // 1 s of digital silence, canonical 44-byte header, 44.1 kHz 16-bit stereo (the only format the slot accepts).
+        std::vector<std::uint8_t> SilentWav() {
+            constexpr std::uint32_t kData = 44100u * 4u;
+            const auto              hdr   = mj::pool::CanonicalWavHeader({ 44100, 2, 16 }, kData);
+            std::vector<std::uint8_t> b(hdr.begin(), hdr.end());
+            b.resize(b.size() + kData, 0);
+            return b;
+        }
+    }
+
     std::map<int, SlotRecord> LoadManifest() {
         std::map<int, SlotRecord> out;
         std::scoped_lock          lk(g_mx);
-        if (g_loaded) return out;
-        g_loaded         = true;
-        const fs::path p = ManifestPath();
-        HANDLE         h = ::CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h == INVALID_HANDLE_VALUE) {
-            spdlog::info("[slots] no slot manifest yet ({}): the plugin has not written a slot file", Utf8(p));
-            return out;
-        }
-        std::string   text;
-        LARGE_INTEGER sz{};
-        if (::GetFileSizeEx(h, &sz) && sz.QuadPart > 0 && sz.QuadPart < (1 << 20)) {
-            text.resize(static_cast<std::size_t>(sz.QuadPart));
-            DWORD got = 0;
-            if (!::ReadFile(h, text.data(), static_cast<DWORD>(text.size()), &got, nullptr)) got = 0;
-            text.resize(got);
-        }
-        ::CloseHandle(h);
-        const auto j = nlohmann::json::parse(text, nullptr, false);
-        if (j.is_discarded() || !j.is_object() || !j.contains("slots") || !j["slots"].is_object()) {
-            spdlog::error("[slots] slot manifest {} is unreadable: every existing slot file is treated as NOT ours (delete the "
-                          "slot_NN.wav files in Data\\Music\\Harmony to let the plugin use them again)",
-                          Utf8(p));
-            return out;
-        }
-        auto str = [](const nlohmann::json& a_o, const char* a_k) {
-            const auto it = a_o.find(a_k);
-            return it != a_o.end() && it->is_string() ? it->get<std::string>() : std::string();
-        };
-        for (const auto& [name, rec] : j["slots"].items()) {
-            Entry e;
-            if (rec.is_array()) {  // version 1: sizes only
-                for (const auto& s : rec)
-                    if (s.is_number_unsigned()) e.sizes.insert(s.get<std::uint64_t>());
-            } else if (rec.is_object()) {
-                if (const auto it = rec.find("sizes"); it != rec.end() && it->is_array()) {
-                    for (const auto& s : *it)
-                        if (s.is_number_unsigned()) e.sizes.insert(s.get<std::uint64_t>());
-                }
-                e.env  = str(rec, "env");
-                e.key  = str(rec, "key");
-                e.file = str(rec, "file");
-                if (!mj::pool::IsCacheFileName(e.file)) e.file.clear();
-            }
-            g_manifest[name] = e;
-        }
+        ReadManifestOnceLocked();
         // Slots whose file still has the single recorded size and a recorded track: the content is known.
         for (int s = 0; s < mj::retarget::kSlotCount; ++s) {
             const auto it = g_manifest.find(mj::retarget::SlotFileName(s));
@@ -182,6 +198,63 @@ namespace MJ::Slots {
         spdlog::info("[slots] slot manifest: {} slot file(s) recorded as written by the plugin, {} with a known track", g_manifest.size(),
                      out.size());
         return out;
+    }
+
+    void EnsurePlaceholders() {
+        // Field log 2026-10-27 (Deck): every slot file the plugin CREATED during the session failed to play instantly (a new
+        // sound handle every tick, the engine skipping to the next entry), while the M0b/M0c slot files, which existed when
+        // the game started, played. So every slot file must exist before the engine starts: each missing one is created
+        // here, at plugin load (before the game initialises its resources), as 1 s of silence; every real fill is then a
+        // rename over an existing file, exactly the M0c case. Placeholders are never bound to a music type (only a slot
+        // holding a pool track is), so they are never heard.
+        const auto       t0 = std::chrono::steady_clock::now();
+        std::scoped_lock lk(g_mx);
+        ReadManifestOnceLocked();
+        std::error_code ec;
+        fs::create_directories(HarmonyDir(), ec);
+        const auto silent  = SilentWav();
+        int        existed = 0, created = 0, failed = 0;
+        std::string missingAtStart;
+        for (int s = 0; s < mj::retarget::kSlotCount; ++s) {
+            const auto    dst = SlotPath(s);
+            std::uint64_t cur = 0;
+            if (FileSize(dst, cur)) {
+                ++existed;
+                continue;
+            }
+            missingAtStart += (missingAtStart.empty() ? "" : ",") + std::format("{:02}", s);
+            fs::path tmp = dst;
+            tmp += L".tmp";
+            HANDLE h = ::CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            bool   ok = h != INVALID_HANDLE_VALUE;
+            if (ok) {
+                DWORD wrote = 0;
+                ok = ::WriteFile(h, silent.data(), static_cast<DWORD>(silent.size()), &wrote, nullptr) && wrote == silent.size() &&
+                     ::FlushFileBuffers(h);
+                ::CloseHandle(h);
+            }
+            // CREATE-only rename (no REPLACE_EXISTING): never overwrites a file that appeared meanwhile.
+            ok = ok && ::MoveFileExW(tmp.c_str(), dst.c_str(), 0);
+            if (!ok) {
+                ++failed;
+                ::DeleteFileW(tmp.c_str());
+                continue;
+            }
+            auto& e = g_manifest[mj::retarget::SlotFileName(s)];
+            e       = Entry{};
+            e.sizes.insert(silent.size());
+            ++created;
+        }
+        if (created > 0 && !SaveManifestLocked()) {
+            spdlog::error("[slots] placeholder slot files created but slots.json could not be written");
+        }
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        if (created > 0 || failed > 0)
+            spdlog::warn("[slots] {} slot file(s) did not exist at game start ({}): created {} silent placeholder(s), {} failed ({} ms). "
+                         "Files created later in a session are not played by the game.",
+                         created + failed, missingAtStart, created, failed, ms);
+        else
+            spdlog::info("[slots] all {} slot files existed at game start ({} ms)", existed, ms);
     }
 
     void CleanTempFiles() {

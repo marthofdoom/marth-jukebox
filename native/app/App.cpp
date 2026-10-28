@@ -342,6 +342,7 @@ namespace MJ::App {
 
     void Init() {
         if (g_store) return;
+        Slots::EnsurePlaceholders();  // before the engine starts: every slot file must exist at game start (Deck field log)
         g_store = std::make_unique<mj::config::SettingsStore>(Slots::PluginDir() / L"MarthJukebox.ini",
                                                               Slots::PluginDir() / L"MarthJukebox" / L"cache");
     }

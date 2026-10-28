@@ -54,6 +54,12 @@ namespace MJ::Retarget {
             const RE::BSIMusicType* type{ nullptr };
             std::uint32_t           handle{ 0 }, idx{ 0 };
             std::uint32_t           n{ 0 };
+            // Diagnosis (Deck field log): 500 ms after a play event, log what the engine is doing with it (first few per
+            // slot per session): still current + same handle + Playing = it really plays; anything else = a failed start.
+            long long               checkAtMs{ -1 };
+            int                     checksLogged{ 0 };
+            long long               noHandleSinceMs{ -1 };  // our entry is current but has no sound handle
+            bool                    noHandleLogged{ false };
         };
         PlayState                   g_play[kSlots];
         std::string                 g_published[kSlots];
@@ -234,13 +240,37 @@ namespace MJ::Retarget {
                                           Probe::NowMs());
                             if (spdlog::should_log(spdlog::level::debug)) Probe::LogTrackHistory(t.type, "play event");
                             Pool::PostPlayEvent(s, t.boundEnv, h, idx);
+                            if (p.checksLogged < 5) p.checkAtMs = Pool::SteadyMs() + 500;
                         }
                     }
                 }
             }
+            const long long now = Pool::SteadyMs();
             for (int s = 0; s < kSlots; ++s) {
+                auto& p = g_play[s];
+                if (p.checkAtMs >= 0 && now >= p.checkAtMs) {
+                    p.checkAtMs = -1;
+                    ++p.checksLogged;
+                    const auto* st = static_cast<const RE::BGSMusicSingleTrack*>(g_wrapper[s]->track);
+                    spdlog::info("[retarget] slot {:02} play check +500 ms: slot still current={} handle now=0x{:08X} (event 0x{:08X}) "
+                                 "inner trackStatus={}{}",
+                                 s, current[s], st->trackHandle.soundID, p.handle, StatusName(st->trackStatus.underlying()),
+                                 current[s] && st->trackHandle.soundID == p.handle ? "" : "  <- NOT playing: the start failed or it was skipped");
+                }
+                // Our entry is the current track but the engine never built a sound handle for it.
+                const bool noHandle = current[s] && (liveHandle[s] == RE::BSSoundHandle::kInvalidID || liveHandle[s] == 0);
+                if (!noHandle) {
+                    p.noHandleSinceMs = -1;
+                } else if (p.noHandleSinceMs < 0) {
+                    p.noHandleSinceMs = now;
+                } else if (!p.noHandleLogged && now - p.noHandleSinceMs >= 1000) {
+                    p.noHandleLogged = true;
+                    spdlog::warn("[retarget] slot {:02} is the current entry (idx={}) but has had no sound handle for 1 s: the game did "
+                                 "not open {} (logged once per session)",
+                                 s, liveIdx[s], mj::retarget::SlotFileName(s));
+                }
                 if (current[s]) Pool::PublishPlay(s, true, liveHandle[s], liveIdx[s]);
-                else Pool::PublishPlay(s, false, g_play[s].handle, g_play[s].idx);
+                else Pool::PublishPlay(s, false, p.handle, p.idx);
             }
         }
 

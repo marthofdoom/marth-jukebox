@@ -30,6 +30,8 @@ namespace MJ::Pool::detail {
         constexpr long long kSourceRejectMs  = 6 * 3600'000ll;
         constexpr int       kMaxDenied       = 3;
         constexpr long long kKillPollMs      = 2000;
+        constexpr int       kFloodEvents     = 6;       // this many play events of one slot ...
+        constexpr long long kFloodWindowMs   = 5000;    // ... within this window = the engine cannot play the file
 
         long long RenameBackoff(int a_attempts) {
             static constexpr long long kSteps[] = { 2'000, 5'000, 15'000, 60'000 };
@@ -54,6 +56,29 @@ namespace MJ::Pool::detail {
         // Caller holds mx. Handles one play event.
         void OnEventLocked(Shared& s, const PlayEvent& e, std::vector<std::function<void()>>& after) {
             auto& sl = s.slots[e.slot];
+            if (sl.disabled) {
+                ++sl.ignoredEvents;  // already reported once; the game thread restores the vanilla tracks when it can
+                return;
+            }
+            // Flood guard: a real track plays for minutes; several new plays within seconds mean the engine fails to
+            // start the file and skips to the next entry at once (Deck field log 2026-10-27: one event per 250 ms tick).
+            sl.recentEvents.push_back(e.ms);
+            while (!sl.recentEvents.empty() && e.ms - sl.recentEvents.front() > kFloodWindowMs) sl.recentEvents.pop_front();
+            if (static_cast<int>(sl.recentEvents.size()) >= kFloodEvents) {
+                sl.disabled           = true;
+                sl.disabledAtRevision = s.store ? s.store->Revision() : 0;
+                sl.failing            = true;
+                sl.fresh              = false;
+                sl.refreshPending     = false;
+                s.envs[e.env].problem = "The game could not play this environment's music file (it skipped it instantly); "
+                                        "back to vanilla until the game is restarted or the settings change. See MarthJukebox.log.";
+                spdlog::error("[slots] slot {:02} ({}): the game started it {} times within {} s and skipped it each time (handle=0x{:08X} "
+                              "idx={}): it cannot play {}. The environment goes back to its vanilla tracks (as soon as its music "
+                              "type is idle) and this slot is not refilled until the game restarts or the settings change.",
+                              e.slot, e.env, sl.recentEvents.size(), kFloodWindowMs / 1000, e.handle, e.idx,
+                              mj::retarget::SlotFileName(e.slot));
+                return;
+            }
             std::string service, id, display = sl.contentKey;
             if (sl.owner == e.env && sl.fresh) {
                 const auto key = sl.contentKey;
@@ -114,7 +139,13 @@ namespace MJ::Pool::detail {
             for (int i = 0; i < kSlots; ++i) {
                 auto&              sl  = s.slots[i];
                 const std::string& env = plan.slotEnv[i];
-                const bool         writable = !env.empty() && plan.engineWrites && !s.killFile.load() &&
+                if (sl.disabled && s.store && s.store->Revision() != sl.disabledAtRevision) {
+                    sl.disabled = false;  // the settings changed: try this slot again
+                    sl.recentEvents.clear();
+                    spdlog::info("[slots] slot {:02}: settings changed, re-enabled after {} ignored play event(s)", i, sl.ignoredEvents);
+                    sl.ignoredEvents = 0;
+                }
+                const bool         writable = !env.empty() && plan.engineWrites && !s.killFile.load() && !sl.disabled &&
                                       (sl.bound.empty() || sl.bound == env);  // never under another environment's types
 
                 // 1. A prepared .tmp waiting for its rename.
