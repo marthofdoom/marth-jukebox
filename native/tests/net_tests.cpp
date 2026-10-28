@@ -658,6 +658,45 @@ namespace {
         CHECK(r.audio.channels == 2 && r.audio.durationS > 69.9 && r.audio.durationS < 70.1);
     }
 
+    // Deck field log (core-fix-deck): a cold transcode makes the server HOLD the request for its whole `wait=`
+    // before answering 202. Reproduces it with a server that sends nothing for `holdS` seconds per request (or until
+    // its `wait=` value, whichever is shorter), then 202 + Retry-After: 1, until `readyAfterS` have passed since the
+    // first request; then 200 + audio. Production timeouts (Config defaults) apart from waitS.
+    void RunColdTranscode(int a_waitS, int a_holdS, int a_readyAfterS, const char* a_tag) {
+        const fs::path    dir = TestDir();
+        const std::string wav = MakeWav(8000, 2, 16, 70.0);
+        const auto        t0  = std::chrono::steady_clock::now();
+        Server s(
+            [&](const Req& q, Conn& c, int) {
+                int        wait = a_holdS;
+                const auto w    = q.target.find("wait=");
+                if (w != std::string::npos) wait = (std::min)(wait, std::atoi(q.target.c_str() + w + 5));
+                const long long left = a_readyAfterS * 1000ll - MsSince(t0);
+                if (left <= 0) {
+                    c.Send(AudioHead(wav.size()) + wav);
+                    return;
+                }
+                c.Wait(static_cast<int>((std::min)(left, wait * 1000ll)));
+                if (a_readyAfterS * 1000ll - MsSince(t0) <= 0) c.Send(AudioHead(wav.size()) + wav);
+                else c.Send(Resp(202, "Accepted", R"({"status":"transcoding","retry_after_s":1})", "Retry-After: 1\r\n"));
+            },
+            true);
+        HarmonyClient cl;
+        Config        cfg;  // production timeouts
+        cfg.baseUrl = s.Url();
+        cfg.waitS   = a_waitS;
+        Configured(cl, cfg);
+        const DownloadResult r = cl.DownloadAudio(kAudioUrl, dir / "cold.wav", 70.0);
+        if (r.error != Error::kOk) Fail(__LINE__, a_tag, std::string(ErrorName(r.error)) + " " + r.message + " after " + std::to_string(MsSince(t0)) + " ms");
+        CHECK(fs::exists(dir / "cold.wav"));
+        std::printf("    %s: %zu request(s), %lld ms\n", a_tag, s.Seen().size(), MsSince(t0));
+    }
+
+    // The Deck case: one request held 25 s (> the 21 s seen in the field) under the PRODUCTION client settings.
+    void T_DownloadColdTranscodeLongHold() { RunColdTranscode(Config{}.waitS, 25, 27, "hold 25 s, production waitS"); }
+    // Scaled: the client must keep looping on 202 within its deadline (each hold = waitS = 1 s, ready after 4 s).
+    void T_DownloadColdTranscodeLoops() { RunColdTranscode(1, 30, 4, "scaled 202 loop"); }
+
     void T_Download202Deadline() {
         const fs::path dir = TestDir();
         Server s([&](const Req&, Conn& c, int) {
@@ -1341,6 +1380,8 @@ int main() {
         { "search", T_Search },
         { "status_services", T_StatusServices },
         { "browse", T_Browse },
+        { "download_cold_transcode_loops", T_DownloadColdTranscodeLoops },
+        { "download_cold_transcode_long_hold", T_DownloadColdTranscodeLongHold },
         { "classify_failure", T_ClassifyFailure },
         { "next_old_server_rejects_unknown_keys", T_NextOldServerRejectsUnknownKeys },
         { "download_wav_ok", T_DownloadWavOk },
