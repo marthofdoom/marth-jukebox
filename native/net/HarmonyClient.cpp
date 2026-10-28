@@ -575,7 +575,9 @@ namespace MJ::Net {
                 a_msg = "cancelled";
                 return Error::kCancelled;
             }
-            if (a_err == ERROR_WINHTTP_TIMEOUT) {
+            // Wine's WinHTTP reports its socket timeouts as the raw Winsock error WSAETIMEDOUT (10060) instead of
+            // ERROR_WINHTTP_TIMEOUT: a timeout either way, not an unreachable server.
+            if (a_err == ERROR_WINHTTP_TIMEOUT || a_err == 10060 /* WSAETIMEDOUT */) {
                 a_msg = "timed out";
                 return Error::kTimeout;
             }
