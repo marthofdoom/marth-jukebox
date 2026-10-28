@@ -469,6 +469,7 @@ namespace MJ::App {
             const Pool::EnvReport* r = rit == byId.end() ? nullptr : &rit->second;
             if (r) {
                 st.ready      = r->ready;
+                if (r->target > 0) st.target = r->target;  // the plan's size (combat/boss keep at least 5)
                 st.nowPlaying = r->nowPlaying;
                 st.poolTitles = r->titles;
             }

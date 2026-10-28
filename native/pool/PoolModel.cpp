@@ -302,6 +302,40 @@ namespace mj::pool
 		return d;
 	}
 
+	bool IsHotEnvironment(std::string_view envId)
+	{
+		auto group = envId.substr(0, envId.find('.'));
+		return group == "combat" || group == "boss";
+	}
+
+	int EffectivePoolSize(std::string_view envId, int poolSize)
+	{
+		return IsHotEnvironment(envId) ? std::max(poolSize, kHotPoolMin) : poolSize;
+	}
+
+	bool UrgentRefill(std::string_view envId, int have)
+	{
+		return have <= 0 || (IsHotEnvironment(envId) && have < 2);
+	}
+
+	int RefillScore(std::string_view envId, int have, int target)
+	{
+		return (UrgentRefill(envId, have) ? 1000 : 0) + (IsHotEnvironment(envId) ? 100 : 0) + std::max(0, target - have);
+	}
+
+	std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude)
+	{
+		std::vector<std::string> out;
+		if (const auto r = index.recent.find(envId); r != index.recent.end()) {
+			for (const auto& k : r->second) {  // oldest first
+				if (k != exclude) {
+					out.push_back(k);
+				}
+			}
+		}
+		return out;
+	}
+
 	bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key)
 	{
 		const auto it = index.recent.find(envId);

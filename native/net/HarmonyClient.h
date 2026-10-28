@@ -208,8 +208,10 @@ namespace MJ::Net {
         // Downloads a_audioUrl (relative to the base URL, or absolute on the SAME host:port) to a_destFile.
         // The final file only ever appears after the byte count and the audio header validated.
         // a_expectedDurationS <= 0 (or <= 60) skips the preview/truncation check.
+        // a_deadlineS > 0 overrides Config::downloadDeadlineS for this call (the 202 waiting budget; e.g. a shorter one
+        // for a pick that is not urgent, so a long cold transcode cannot hold up an empty pool).
         DownloadResult DownloadAudio(std::string_view a_audioUrl, const std::filesystem::path& a_destFile,
-                                     double a_expectedDurationS, std::stop_token a_st = {});
+                                     double a_expectedDurationS, std::stop_token a_st = {}, int a_deadlineS = 0);
 
     private:
         struct Impl;

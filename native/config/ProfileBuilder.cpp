@@ -191,7 +191,7 @@ namespace mj::config
 		return r;
 	}
 
-	ProfileBuild BuildProfile(const Settings& settings, bool logProblems)
+	ProfileBuild BuildProfile(const Settings& settings, bool logProblems, bool trimSilence)
 	{
 		ProfileBuild out;
 		const Ctx ctx{ &out.problems, logProblems };
@@ -234,6 +234,9 @@ namespace mj::config
 		json root = json::object();
 		root["types"] = std::move(types);
 		root["normalize"] = true;
+		if (trimSilence) {
+			root["trim_silence"] = true;
+		}
 		root["format"] = json::object({ { "rate", 44100 }, { "bits", 16 }, { "channels", 2 } });
 		// Profile-level default source set is ALWAYS Library only (streaming is a per-environment opt-in, see
 		// NEXUS-COMPLIANCE). Every `next` call passes `sources` explicitly from AllowStreaming, which overrides it;

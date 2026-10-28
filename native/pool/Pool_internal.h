@@ -40,12 +40,12 @@ namespace MJ::Pool::detail {
         std::uint32_t eventHandle = 0, eventIdx = 0;
         long long     retryAtMs = 0;  // after a failed write
         std::string   lastError;
-        bool          replay = false; // the file holds an already played track (pool dry while the type plays, A-F2)
         // A prepared slot_NN.wav.tmp whose rename failed (A-F1): only the rename is retried.
         bool          prepared = false;
         std::string   prepEnv, prepKey, prepFile, prepDisplay;
         bool          prepReplay = false;
         std::uint64_t prepBytes = 0;
+        long long     prepMs = 0;
         int           renameAttempts = 0;
         int           deniedAttempts = 0;
         // Flood guard (Deck field log): play events of this slot within the last few seconds; a slot the engine skips
@@ -92,6 +92,14 @@ namespace MJ::Pool::detail {
         std::stop_source            jobStop;            // the pool thread's current network job (A-F3)
         std::string                 netUrl, netKey;     // what the pool client is configured with (Deck fix)
         std::string                 jobEnv, jobFp;      // environment + fingerprint the current refill job works for
+        bool                        jobUrgent = false;  // that job refills an urgent pool (never preempted)
+        std::string                 netWhat;            // PerfNow: what the pool thread downloads
+        // PerfNow counters (SteadyMs; 0 = idle)
+        std::atomic<long long>      slotJobSince{ 0 };
+        std::atomic<int>            slotJobSlot{ -1 };
+        std::atomic<long long>      lastSlotJobEnd{ 0 };
+        std::atomic<long long>      lastSlotJobMs{ 0 };
+        std::atomic<long long>      netSince{ 0 };
         std::deque<std::string>     toasts;             // in-game notifications for the game thread
         std::map<std::string, std::string> playedTitles; // "service:id" -> "Artist - Title" of served tracks (replay lines)
         bool                        clearCacheRequested = false;

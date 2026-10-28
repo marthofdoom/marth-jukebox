@@ -106,6 +106,20 @@ namespace mj::pool
 	};
 	[[nodiscard]] DiskUsage MeasureDisk(const std::filesystem::path& cacheDir, const std::vector<std::filesystem::path>& extra);
 
+	// ---- refill policy (field #4: a fight must never wait on the network) ---------------------------
+	// Combat and boss drain fastest (a fight consumes a track and gives no warning): they keep at least 5 ready.
+	inline constexpr int kHotPoolMin = 5;
+	[[nodiscard]] bool IsHotEnvironment(std::string_view envId);  // "combat", "boss" and their sub-environments
+	[[nodiscard]] int  EffectivePoolSize(std::string_view envId, int poolSize);
+	// Urgent = the pool is empty, or a hot environment has fewer than 2 ready. An urgent refill may cancel a running
+	// non-urgent download and gets the full download deadline; a non-urgent one gets a short one.
+	[[nodiscard]] bool UrgentRefill(std::string_view envId, int have);
+	// Which environment the pool thread refills next: larger first. Urgent before anything; then hot; then the gap.
+	[[nodiscard]] int RefillScore(std::string_view envId, int have, int target);
+	// Recently played keys to rotate through a slot while its pool is dry: least recently played first, without
+	// `exclude` (the track the slot holds now). The caller keeps the ones whose cache file still exists.
+	[[nodiscard]] std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude);
+
 	// ---- recent-played list (per environment, bounded) -------------------------------------------
 	[[nodiscard]] bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key);
 	void               AddRecent(PoolIndex& index, std::string_view envId, std::string_view key);

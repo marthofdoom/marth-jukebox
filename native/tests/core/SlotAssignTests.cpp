@@ -75,3 +75,15 @@ MJ_TEST(Slots_MoreEnvironmentsThanSlotsStayVanilla)
 	MJ_CHECK(p.unassigned.size() == 6 && p.unassigned.front() == "env124");
 	MJ_CHECK(SlotFileName(7) == "slot_07.wav" && SlotEditorId(23) == "MJ_SLOT_23");
 }
+
+// Field #4: a type never falls back to vanilla while its slot can play something of its own environment.
+MJ_TEST(Slots_ReadyDecision)
+{
+	MJ_CHECK(SlotReady("combat", "combat", true, false, false, -1, 0));       // unplayed pool track
+	MJ_CHECK(SlotReady("combat", "combat", false, true, false, -1, 0));       // pool dry: an earlier track from the cache
+	MJ_CHECK(SlotReady("combat", "combat", false, false, false, 1000, 5000)); // just played, refill due
+	MJ_CHECK(!SlotReady("combat", "combat", false, false, false, 1000, 20000)); // played long ago, nothing placed since
+	MJ_CHECK(!SlotReady("combat", "combat", true, true, true, -1, 0));       // failing (flood guard): never
+	MJ_CHECK(!SlotReady("explore", "combat", true, false, false, -1, 0));     // the file belongs to another environment
+	MJ_CHECK(!SlotReady("", "combat", true, false, false, -1, 0));            // unknown content (placeholder)
+}

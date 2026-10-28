@@ -266,6 +266,13 @@ namespace MJ::Slots {
 
     void DiscardTmp(int a_slot) { ::DeleteFileW(TmpPath(a_slot).c_str()); }
 
+    void LowerCurrentThreadPriority(const char* a_name) {
+        const bool bg  = ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != 0;
+        const bool low = ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) != 0;
+        spdlog::info("[perf] {} thread: background IO mode {}, priority below normal {}", a_name, bg ? "on" : "unavailable",
+                     low ? "on" : "unavailable");
+    }
+
     PrepResult PrepareSlot(int a_slot, const fs::path& a_src, std::stop_token a_st) {
         PrepResult r;
         const auto t0  = std::chrono::steady_clock::now();
@@ -287,7 +294,9 @@ namespace MJ::Slots {
             }
         }
         // 2. Decode / copy into the .tmp as a canonical WAV, flushed to disk.
-        const auto cr = mj::pool::ConvertToCanonicalWav(a_src, tmp, a_st);
+        // Not durable (no fsync) and paced: a slot file is recreatable (a crash leaves at worst a size the manifest does not
+        // list or content the pool still has), and a 60 MB synchronous flush on the game's disk can stall its streaming.
+        const auto cr = mj::pool::ConvertToCanonicalWav(a_src, tmp, a_st, false);
         if (!cr.ok) {
             ::DeleteFileW(tmp.c_str());
             r.sourceError = cr.sourceError;

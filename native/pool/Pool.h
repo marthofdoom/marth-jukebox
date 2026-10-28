@@ -46,6 +46,7 @@ namespace MJ::Pool {
         std::string owner;             // environment whose track the file holds ("" = none / unknown)
         bool        fresh = false;     // holds an unplayed pool track
         bool        failing = false;   // cannot be (re)filled right now (pool empty, write refused)
+        bool        replay = false;    // holds an earlier track of `owner` placed while its pool was dry (still playable)
         long long   servedAtMs = -1;   // SteadyMs() of the play event that consumed the content
     };
 
@@ -72,6 +73,9 @@ namespace MJ::Pool {
     bool KillSwitchSeen();   // the slot thread's 2 s poll of the kill-switch file
     // Next in-game notification text queued by the pool thread (pool/ToastPolicy.h), if any. Game thread shows it.
     std::optional<std::string> PopToast();
+    // What the workers are doing right now (slot write, download) and the last slot job's timing: appended to the
+    // stall detector's warning so a log separates a game stall (autosave, loading) from our IO (field #4).
+    std::string PerfNow();
     long long SteadyMs();
 
     // ---- status for the menu (any thread) ----

@@ -62,6 +62,8 @@ namespace mj::pool
 	// FLAC: the decoded frame count must equal STREAMINFO's total (a truncated or corrupt stream fails).
 	// Anything longer than 2 hours is refused (Harmony cuts its sources there).
 	// The stop token is checked between blocks; a stop gives ok=false, error "cancelled".
+	// `durable` = false: the output is not forced to disk (no fsync; close only) and the writing pauses 2 ms after every
+	// 4 MiB, for recreatable files written next to a running game (slot files).
 	ConvertResult ConvertToCanonicalWav(const std::filesystem::path& src, const std::filesystem::path& dst,
-		std::stop_token st = {});
+		std::stop_token st = {}, bool durable = true);
 }

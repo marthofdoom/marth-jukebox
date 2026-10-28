@@ -396,3 +396,27 @@ MJ_TEST(Pool_MeasureDiskCountsCacheAndSlotFiles)
 	const auto d = MeasureDisk(cache, { dir.Path() / "slot_00.wav", dir.Path() / "slot_01.wav" });
 	MJ_CHECK(d.cacheBytes == 150 && d.cacheFiles == 2 && d.extraBytes == 30);
 }
+
+// Field #4: refill policy (combat/boss first and deeper; urgent before anything) and the replay rotation order.
+MJ_TEST(Pool_RefillPolicy)
+{
+	MJ_CHECK(IsHotEnvironment("combat") && IsHotEnvironment("combat.civil_war") && IsHotEnvironment("boss"));
+	MJ_CHECK(!IsHotEnvironment("explore") && !IsHotEnvironment("dungeon.cave") && !IsHotEnvironment("combatx"));
+	MJ_CHECK(EffectivePoolSize("combat", 3) == 5 && EffectivePoolSize("combat", 8) == 8 && EffectivePoolSize("explore", 3) == 3);
+	MJ_CHECK(UrgentRefill("explore", 0) && !UrgentRefill("explore", 1));
+	MJ_CHECK(UrgentRefill("combat", 1) && !UrgentRefill("combat", 2));
+	// An empty dungeon pool still beats a combat pool at 2 of 5; a combat pool at 1 beats a dungeon at 1 of 3.
+	MJ_CHECK(RefillScore("dungeon", 0, 3) > RefillScore("combat", 2, 5));
+	MJ_CHECK(RefillScore("combat", 1, 5) > RefillScore("dungeon", 1, 3));
+	// Never a non-urgent dungeon refill ahead of an urgent combat one.
+	MJ_CHECK(RefillScore("combat", 0, 5) > RefillScore("dungeon", 2, 3));
+	MJ_CHECK(RefillScore("explore", 3, 3) < RefillScore("explore", 2, 3));
+
+	PoolIndex idx;
+	AddRecent(idx, "combat", "local:a");
+	AddRecent(idx, "combat", "local:b");
+	AddRecent(idx, "combat", "local:c");
+	const auto order = ReplayOrder(idx, "combat", "local:c");
+	MJ_CHECK(order.size() == 2 && order[0] == "local:a" && order[1] == "local:b");
+	MJ_CHECK(ReplayOrder(idx, "explore", "").empty());
+}

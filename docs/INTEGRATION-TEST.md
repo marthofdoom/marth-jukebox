@@ -29,6 +29,12 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
    A retargeted type that is current for 2 s without a play event gets one `[music] ... gave no play event for 2 s` warning.
    For a fight: note the clock time it starts and what you hear (silence / vanilla combat music / a Harmony track).
 
+4. Field #4 checks. During and after fights: combat music starts with the fight (note the clock time of any delay);
+   the combat row shows "N of 5 ready"; no `RESTORED to vanilla` for combat types while `[slots] ... <- REPLAY` lines show
+   earlier tracks being placed; every `[stall] ... gap ... ms` warning ends with `ours: ...` (whether a slot write or a
+   download was running): a gap while ours says "idle" / "not downloading" is the game's own (autosave, loading).
+   Each slot write line shows `decode+write N ms, manifest+rename N ms`.
+
 ## 2. Configure (menu or INI) (acceptance 3)
 1. Set ServerUrl + PersonalKey, and: `explore` = Genre (a genre the library really has; the picker lists them),
    `combat` = Query `epic battle music orchestral` with streaming ON, `dungeon` = Artist from the library.

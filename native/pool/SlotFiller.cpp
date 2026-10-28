@@ -196,25 +196,29 @@ namespace MJ::Pool::detail {
                     s.inUse.insert(job.file);
                     return job;
                 }
-                // Pool dry. While this slot is the one playing, rotate recently played tracks (A-F2); otherwise the
-                // slot is not ready and the game thread falls back to the vanilla tracks.
-                if (sl.refreshPending && s.playCurrent[i].load()) {
-                    if (const auto r = s.index.recent.find(env); r != s.index.recent.end()) {
-                        for (const auto& key : r->second) {  // oldest first
-                            if (key == sl.contentKey) continue;
-                            const auto [svc, id] = SplitKey(key);
-                            if (svc.empty() || id.empty()) continue;
-                            job.candidates.push_back(
-                                { key, { mj::pool::CacheFileName(svc, id, "flac"), mj::pool::CacheFileName(svc, id, "wav") } });
-                        }
-                    }
-                    if (!job.candidates.empty()) {
-                        job.kind   = Job::Kind::kPrepare;
-                        job.slot   = i;
-                        job.env    = env;
-                        job.replay = true;
-                        return job;
-                    }
+                // Pool dry. Field #4: never fall back to vanilla while the cache can play something of this environment:
+                // place its recently played tracks (least recently played first) in the slot, whether or not it plays
+                // right now. And an empty pool must not wait behind a download for another environment that is not
+                // urgent: cancel that one (the server keeps transcoding; it comes back fast later).
+                const auto es = s.envs.find(env);
+                const bool refillable = es == s.envs.end() || (now >= es->second.backoffUntilMs && !es->second.waitForPlay);
+                if (refillable && !s.jobEnv.empty() && s.jobEnv != env && !s.jobUrgent) {
+                    spdlog::info("[slots] slot {:02} ({}): pool empty; cancelling the non-urgent {} download so this pool refills first", i,
+                                 env, s.jobEnv);
+                    s.jobStop.request_stop();
+                    s.jobUrgent = true;  // once
+                }
+                for (const auto& key : mj::pool::ReplayOrder(s.index, env, sl.contentKey)) {
+                    const auto [svc, id] = SplitKey(key);
+                    if (svc.empty() || id.empty()) continue;
+                    job.candidates.push_back({ key, { mj::pool::CacheFileName(svc, id, "flac"), mj::pool::CacheFileName(svc, id, "wav") } });
+                }
+                if (!job.candidates.empty()) {
+                    job.kind   = Job::Kind::kPrepare;
+                    job.slot   = i;
+                    job.env    = env;
+                    job.replay = true;
+                    return job;
                 }
                 if (!sl.failing) spdlog::warn("[slots] slot {:02} ({}): pool empty, no track to place (environment degrades to Vanilla)", i, env);
                 sl.failing        = true;
@@ -225,6 +229,7 @@ namespace MJ::Pool::detail {
         }
 
         void DoCommit(Shared& s, const Job& j) {
+            long long  renameMs = 0;
             const auto r = [&] {
                 std::uint64_t bytes = 0;
                 bool          first = false;
@@ -233,7 +238,10 @@ namespace MJ::Pool::detail {
                     bytes = s.slots[j.slot].prepBytes;
                     first = s.slots[j.slot].renameAttempts == 0;
                 }
-                return Slots::CommitSlot(j.slot, bytes, first, j.env, j.key, j.file);
+                const auto t0 = std::chrono::steady_clock::now();
+                auto       cr = Slots::CommitSlot(j.slot, bytes, first, j.env, j.key, j.file);
+                renameMs      = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+                return cr;
             }();
             bool discard = false;
             {
@@ -253,8 +261,10 @@ namespace MJ::Pool::detail {
                 sl.renameAttempts = 0;
                 sl.deniedAttempts = 0;
                 sl.lastError.clear();
-                spdlog::info("[slots] slot {:02} ({}) <- {}{} ({:.1f} MB)", j.slot, j.env, j.replay ? "REPLAY " : "", j.display,
-                             sl.prepBytes / 1048576.0);
+                int poolLeft = 0;
+                if (const auto p = s.index.pools.find(j.env); p != s.index.pools.end()) poolLeft = static_cast<int>(p->second.entries.size());
+                spdlog::info("[slots] slot {:02} ({}) <- {}{} ({:.1f} MB; decode+write {} ms, manifest+rename {} ms; pool {} ready)", j.slot,
+                             j.env, j.replay ? "REPLAY " : "", j.display, sl.prepBytes / 1048576.0, sl.prepMs, renameMs, poolLeft);
                 return;
             }
             if (r.accessDenied) ++sl.deniedAttempts;
@@ -305,10 +315,11 @@ namespace MJ::Pool::detail {
                 std::scoped_lock lk(s.mx);
                 auto&            sl = s.slots[j.slot];
                 if (src.empty()) {
-                    if (!sl.failing) spdlog::warn("[slots] slot {:02} ({}): pool empty and no recently played track is cached; the "
-                                                  "previous track repeats", j.slot, j.env);
+                    if (!sl.failing) spdlog::warn("[slots] slot {:02} ({}): pool empty and no recently played track is cached "
+                                                  "(environment degrades to Vanilla until a download lands)", j.slot, j.env);
                     sl.failing        = true;
                     sl.refreshPending = false;
+                    sl.retryAtMs      = SteadyMs() + 30'000;  // the cache will not change by itself: look again later
                     return;
                 }
                 s.inUse.insert(j.file);
@@ -316,7 +327,12 @@ namespace MJ::Pool::detail {
                 std::scoped_lock lk(s.mx);
                 src = s.cacheDir / j.file;
             }
-            const auto r = Slots::PrepareSlot(j.slot, src, a_st);
+            s.slotJobSlot  = j.slot;
+            s.slotJobSince = SteadyMs();
+            const auto r   = Slots::PrepareSlot(j.slot, src, a_st);
+            s.slotJobSince = 0;
+            s.lastSlotJobEnd = SteadyMs();
+            s.lastSlotJobMs  = r.ms;
             std::scoped_lock lk(s.mx);
             s.inUse.erase(j.file);
             auto& sl = s.slots[j.slot];
@@ -328,6 +344,7 @@ namespace MJ::Pool::detail {
                 sl.prepDisplay    = j.display;
                 sl.prepReplay     = j.replay;
                 sl.prepBytes      = r.bytes;
+                sl.prepMs         = r.ms;
                 sl.renameAttempts = 0;
                 sl.deniedAttempts = 0;
                 sl.retryAtMs      = 0;  // commit right away (the next loop iteration)
@@ -353,6 +370,7 @@ namespace MJ::Pool::detail {
 
     void SlotThread(std::stop_token a_st) {
         auto& s = S();
+        Slots::LowerCurrentThreadPriority("slot");
         spdlog::info("[slots] thread started; slot dir {}", Slots::Utf8(Slots::HarmonyDir()));
         const auto known = Slots::LoadManifest();
         Slots::CleanTempFiles();

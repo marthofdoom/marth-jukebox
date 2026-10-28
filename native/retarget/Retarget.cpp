@@ -419,8 +419,10 @@ namespace MJ::Retarget {
         const auto  now    = Pool::SteadyMs();
         const auto* mgr    = RE::BSMusicManager::GetSingleton();
 
-        TickPlay(mgr);
+        // Diagnosis first: it resets "played" on a type change, and a play event in the same tick must count (field #4:
+        // the "no play event for 2 s" warning fired although the PLAY line was logged in that very tick).
         TickCurrentDiagnosis(mgr);
+        TickPlay(mgr);
 
         if (plan && plan->gen != g_loggedPlan) {
             g_loggedPlan = plan->gen;
@@ -440,7 +442,7 @@ namespace MJ::Retarget {
                 const int   s = plan->typeSlot[i];
                 const auto& v = views[s];
                 env           = plan->slotEnv[s];
-                const bool ready = v.owner == env && (v.fresh || (!v.failing && v.servedAtMs >= 0 && now - v.servedAtMs < kServedGraceMs));
+                const bool ready = mj::retarget::SlotReady(v.owner, env, v.fresh, v.replay, v.failing, v.servedAtMs, now, kServedGraceMs);
                 if (ready) desired = s;
                 else why = "slot not ready (pool empty or file not written)";
             } else {
