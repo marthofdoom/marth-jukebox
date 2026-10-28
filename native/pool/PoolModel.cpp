@@ -323,6 +323,21 @@ namespace mj::pool
 		return !trimSilence || expectedS - decodedS > 30.0;
 	}
 
+	int CapAwareTarget(int base, int adaptive, std::uint64_t pooledBytes, std::uint64_t capBytes)
+	{
+		return pooledBytes < capBytes / 4 * 3 ? std::max(base, adaptive) : base;
+	}
+
+	bool RefillAllowedUnderCap(std::uint64_t pooledBytes, std::uint64_t capBytes, bool urgent, std::uint64_t oneTrackBytes)
+	{
+		return pooledBytes < capBytes || (urgent && pooledBytes < capBytes + oneTrackBytes);
+	}
+
+	bool ShouldPreempt(std::string_view jobEnv, bool jobUrgent, std::string_view env, bool envUrgent)
+	{
+		return envUrgent && !jobEnv.empty() && jobEnv != env && !jobUrgent;
+	}
+
 	bool IsHotEnvironment(std::string_view envId)
 	{
 		auto group = envId.substr(0, envId.find('.'));

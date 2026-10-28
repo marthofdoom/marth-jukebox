@@ -123,6 +123,26 @@ namespace mj::pool
 	// one takes `avgDownloadS` (cold transcodes 30-120 s on the Deck), and other environments share the one download
 	// thread. target = max(base, ceil(avgDownloadS / avgTrackS) + 2), at most 8; `base` when nothing is known yet.
 	[[nodiscard]] int AdaptivePoolSize(int base, double avgDownloadS, double avgTrackS);
+
+	// Review F5-2: the cache cap. Adaptive growth beyond `base` only while the pooled bytes stay below 75% of the cap;
+	// a refill is allowed below the cap, and an URGENT one may exceed it by one track (eviction of unprotected files
+	// still runs afterwards), so a full cache never blocks the pool that is about to run dry.
+	[[nodiscard]] int  CapAwareTarget(int base, int adaptive, std::uint64_t pooledBytes, std::uint64_t capBytes);
+	[[nodiscard]] bool RefillAllowedUnderCap(std::uint64_t pooledBytes, std::uint64_t capBytes, bool urgent, std::uint64_t oneTrackBytes);
+
+	// Field #5: cancel a running download for an urgent pool? Only a non-urgent job for ANOTHER environment, once per job
+	// (`jobUrgent` is set after the first cancel).
+	[[nodiscard]] bool ShouldPreempt(std::string_view jobEnv, bool jobUrgent, std::string_view env, bool envUrgent);
+
+	// Field #5: drop the cold picks at the front of an environment's retry queue that belong to an older selection
+	// (entries are queued in order, so stale ones are always in front). Works on any queue of items with `.fingerprint`.
+	template <class Queue>
+	void PopStaleColdPicks(Queue& q, std::string_view fingerprint)
+	{
+		while (!q.empty() && q.front().fingerprint != fingerprint) {
+			q.pop_front();
+		}
+	}
 	// Which environment the pool thread refills next: larger first. Urgent before anything; then hot; then the gap.
 	[[nodiscard]] int RefillScore(std::string_view envId, int have, int target);
 	// Review R6-1: whether a track of `service` may play under the environment's CURRENT `sources` (consent):

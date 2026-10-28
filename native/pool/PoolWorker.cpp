@@ -644,6 +644,8 @@ namespace MJ::Pool {
             const EnvPlan* pick = nullptr;
             int         have = 0;
             int         pickTarget = 0;
+            bool        capBlocked = false;
+            std::vector<std::string> targetLines;
             std::uint64_t pooledBytes = 0;
             {
                 HeldLock lk(s, __func__);
@@ -660,10 +662,12 @@ namespace MJ::Pool {
                     const int  n   = pit == s.index.pools.end() ? 0 : static_cast<int>(pit->second.entries.size());
                     // Field #5: the target adapts to observed download time vs track length (at most 8).
                     auto&     es     = s.envs[id];
-                    const int target = mj::pool::AdaptivePoolSize(ep.poolSize, ns.avgDownloadS, es.avgTrackS);
+                    // Review F5-2: grow beyond the setting only while the pooled tracks stay below 75% of the cache cap.
+                    const int target = mj::pool::CapAwareTarget(ep.poolSize, mj::pool::AdaptivePoolSize(ep.poolSize, ns.avgDownloadS, es.avgTrackS),
+                                                                pooledBytes, s.capBytes);
                     if (target != es.target && target != ep.poolSize)
-                        spdlog::info("[pool] {}: keeping {} tracks ready (downloads ~{:.0f} s, tracks ~{:.0f} s)", id, target, ns.avgDownloadS,
-                                     es.avgTrackS);
+                        targetLines.push_back(std::format("[pool] {}: keeping {} tracks ready (downloads ~{:.0f} s, tracks ~{:.0f} s)", id,
+                                                          target, ns.avgDownloadS, es.avgTrackS));
                     es.target = target;
                     if (n >= target) continue;
                     if (now < es.backoffUntilMs) continue;
@@ -676,12 +680,18 @@ namespace MJ::Pool {
                         pickTarget = target;
                     }
                 }
-                if (pick && pooledBytes >= s.capBytes) {
+                // Review F5-2: an urgent refill may exceed the cap by one track (eviction still runs afterwards).
+                std::size_t   pooledCount = 0;
+                for (const auto& [id, p] : s.index.pools) pooledCount += p.entries.size();
+                const std::uint64_t oneTrack = pooledCount ? pooledBytes / pooledCount : 64ull * 1048576;
+                if (pick && !mj::pool::RefillAllowedUnderCap(pooledBytes, s.capBytes, mj::pool::UrgentRefill(pick->id, have), oneTrack)) {
                     s.envs[pick->id].problem = "Cache size cap reached: raise CacheCapMB or use smaller pools";
                     s.envs[pick->id].backoffUntilMs = SteadyMs() + 60'000;
-                    return false;
+                    capBlocked = true;
                 }
             }
+            for (const auto& l : targetLines) spdlog::info("{}", l);  // outside s.mx (review F5)
+            if (capBlocked) return false;
             if (!pick) return false;
             const EnvPlan ep     = *pick;  // copy: the plan pointer stays alive anyway
             const bool    urgent = mj::pool::UrgentRefill(ep.id, have);
@@ -711,7 +721,7 @@ namespace MJ::Pool {
             bool            fromPending = false;
             {
                 auto& q = ns.coldPending[ep.id];
-                while (!q.empty() && q.front().fingerprint != ep.fingerprint) q.pop_front();
+                mj::pool::PopStaleColdPicks(q, ep.fingerprint);
                 if (!q.empty() && q.front().retryAtMs <= SteadyMs()) {
                     nr.tracks   = { q.front().track };
                     fromPending = true;
@@ -1006,6 +1016,8 @@ namespace MJ::Pool {
                     return s.settingsDirty || s.clearCacheRequested || s.poolWake || s.replanWanted || s.store->Revision() != ns.seenRev ||
                            (s.haveCatalogue && ns.planGen == 0);
                 });
+                // Review F5-1: unlike the slot thread, nothing runs under s.mx here after the wake (the scope ends at once)
+                // and the predicate reads flags only, so this section has no holder name to report.
             }
             SaveIndexIfDirty();
             spdlog::info("[pool] thread stopped");

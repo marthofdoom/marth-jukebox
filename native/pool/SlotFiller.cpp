@@ -98,7 +98,7 @@ namespace MJ::Pool::detail {
                 {
                     const auto p    = s.index.pools.find(e.env);
                     const int  left = p == s.index.pools.end() ? 0 : static_cast<int>(p->second.entries.size());
-                    if (mj::pool::UrgentRefill(e.env, left) && !s.jobEnv.empty() && s.jobEnv != e.env && !s.jobUrgent) {
+                    if (mj::pool::ShouldPreempt(s.jobEnv, s.jobUrgent, e.env, mj::pool::UrgentRefill(e.env, left))) {
                         spdlog::info("[slots] {}: {} track(s) left after this play; cancelling the non-urgent {} download so this pool "
                                      "refills first", e.env, left, s.jobEnv);
                         s.jobStop.request_stop();
@@ -249,7 +249,7 @@ namespace MJ::Pool::detail {
                 // urgent: cancel that one (the server keeps transcoding; it comes back fast later).
                 const auto es = s.envs.find(env);
                 const bool refillable = es == s.envs.end() || (now >= es->second.backoffUntilMs && !es->second.waitForPlay);
-                if (refillable && !s.jobEnv.empty() && s.jobEnv != env && !s.jobUrgent) {
+                if (mj::pool::ShouldPreempt(s.jobEnv, s.jobUrgent, env, refillable)) {
                     spdlog::info("[slots] slot {:02} ({}): pool empty; cancelling the non-urgent {} download so this pool refills first", i,
                                  env, s.jobEnv);
                     s.jobStop.request_stop();
@@ -453,6 +453,13 @@ namespace MJ::Pool::detail {
             {
                 std::unique_lock lk(s.mx);
                 (void)s.slotCv.wait_for(lk, a_st, 250ms, [&] { return !s.events.empty(); });
+                // Review F5-1: from here to the end of this block the slot thread holds s.mx (play events with their log
+                // lines, picking a job): name it for the game thread's lock-wait report, clear it before the unlock.
+                s.holder.store("SlotThread(events+pick)", std::memory_order_relaxed);
+                struct ClearHolder {
+                    Shared& sh;
+                    ~ClearHolder() { sh.holder.store(nullptr, std::memory_order_relaxed); }
+                } clearHolder{ s };
                 if (a_st.stop_requested()) break;
                 while (!s.events.empty()) {
                     const PlayEvent e = std::move(s.events.front());

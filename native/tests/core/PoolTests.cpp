@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include <functional>
+#include <deque>
 #include <map>
 
 using namespace mj::pool;
@@ -566,4 +567,34 @@ MJ_TEST(Pool_AdaptivePoolSize)
 	MJ_CHECK(AdaptivePoolSize(3, 1000.0, 30.0) == 8);   // capped at 8
 	MJ_CHECK(AdaptivePoolSize(5, 30.0, 200.0) == 5);    // never below the setting / hot minimum
 	MJ_CHECK(AdaptivePoolSize(8, 1000.0, 30.0) == 8);
+}
+
+// Review F5-2 + field #5 helpers.
+MJ_TEST(Pool_CapAndPreemptRules)
+{
+	constexpr std::uint64_t MB = 1048576;
+	MJ_CHECK(CapAwareTarget(3, 6, 100 * MB, 1000 * MB) == 6);   // room: grow
+	MJ_CHECK(CapAwareTarget(3, 6, 800 * MB, 1000 * MB) == 3);   // above 75%: no growth beyond the setting
+	MJ_CHECK(CapAwareTarget(5, 3, 0, 1000 * MB) == 5);
+	MJ_CHECK(RefillAllowedUnderCap(900 * MB, 1000 * MB, false, 40 * MB));
+	MJ_CHECK(!RefillAllowedUnderCap(1000 * MB, 1000 * MB, false, 40 * MB));  // full: non-urgent waits
+	MJ_CHECK(RefillAllowedUnderCap(1000 * MB, 1000 * MB, true, 40 * MB));    // urgent: one track over the cap
+	MJ_CHECK(!RefillAllowedUnderCap(1040 * MB, 1000 * MB, true, 40 * MB));   // but only one
+
+	MJ_CHECK(ShouldPreempt("boss", false, "explore", true));
+	MJ_CHECK(!ShouldPreempt("boss", true, "explore", true));      // already cancelled once / urgent job
+	MJ_CHECK(!ShouldPreempt("explore", false, "explore", true));  // its own job
+	MJ_CHECK(!ShouldPreempt("", false, "explore", true));         // nothing running
+	MJ_CHECK(!ShouldPreempt("boss", false, "explore", false));    // not urgent
+
+	struct Cold
+	{
+		std::string fingerprint;
+		int         n;
+	};
+	std::deque<Cold> q{ { "old", 1 }, { "old", 2 }, { "new", 3 } };
+	PopStaleColdPicks(q, "new");
+	MJ_CHECK(q.size() == 1 && q.front().n == 3);
+	PopStaleColdPicks(q, "newer");
+	MJ_CHECK(q.empty());
 }
