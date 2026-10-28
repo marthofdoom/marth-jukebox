@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include <functional>
+#include <deque>
 #include <map>
 
 using namespace mj::pool;
@@ -403,7 +404,7 @@ MJ_TEST(Pool_RefillPolicy)
 	MJ_CHECK(IsHotEnvironment("combat") && IsHotEnvironment("combat.civil_war") && IsHotEnvironment("boss"));
 	MJ_CHECK(!IsHotEnvironment("explore") && !IsHotEnvironment("dungeon.cave") && !IsHotEnvironment("combatx"));
 	MJ_CHECK(EffectivePoolSize("combat", 3) == 5 && EffectivePoolSize("combat", 8) == 8 && EffectivePoolSize("explore", 3) == 3);
-	MJ_CHECK(UrgentRefill("explore", 0) && !UrgentRefill("explore", 1));
+	MJ_CHECK(UrgentRefill("explore", 0) && UrgentRefill("explore", 1) && !UrgentRefill("explore", 2));  // field #5: <= 1
 	MJ_CHECK(UrgentRefill("combat", 1) && !UrgentRefill("combat", 2));
 	// An empty dungeon pool still beats a combat pool at 2 of 5; a combat pool at 1 beats a dungeon at 1 of 3.
 	MJ_CHECK(RefillScore("dungeon", 0, 3) > RefillScore("combat", 2, 5));
@@ -554,4 +555,54 @@ MJ_TEST(Pool_IndexKeepsReplayable)
 	// An index written before R7-2 has no "replayable": nothing is replayable until played again.
 	MJ_CHECK(ParseIndex(R"({"version":1,"pools":{},"recent":{"explore":["local:x"]}})", back, diag));
 	MJ_CHECK(back.replayable.empty() && back.recent["explore"].size() == 1);
+}
+
+// Field #5: pool depth from observed download time vs track length (Deck: 30-120 s downloads, 80-150 s explore tracks).
+MJ_TEST(Pool_AdaptivePoolSize)
+{
+	MJ_CHECK(AdaptivePoolSize(3, 0.0, 0.0) == 3);       // nothing observed yet
+	MJ_CHECK(AdaptivePoolSize(3, 45.0, 130.0) == 3);    // fast enough: the setting stands
+	MJ_CHECK(AdaptivePoolSize(3, 117.0, 80.0) == 4);    // slow downloads, short tracks: deeper
+	MJ_CHECK(AdaptivePoolSize(3, 300.0, 60.0) == 7);
+	MJ_CHECK(AdaptivePoolSize(3, 1000.0, 30.0) == 8);   // capped at 8
+	MJ_CHECK(AdaptivePoolSize(5, 30.0, 200.0) == 5);    // never below the setting / hot minimum
+	MJ_CHECK(AdaptivePoolSize(8, 1000.0, 30.0) == 8);
+}
+
+// Review F5-2 + field #5 helpers.
+MJ_TEST(Pool_CapAndPreemptRules)
+{
+	constexpr std::uint64_t MB = 1048576;
+	MJ_CHECK(CapAwareTarget(3, 6, 100 * MB, 1000 * MB) == 6);   // room: grow
+	MJ_CHECK(CapAwareTarget(3, 6, 800 * MB, 1000 * MB) == 3);   // above 75%: no growth beyond the setting
+	MJ_CHECK(CapAwareTarget(5, 3, 0, 1000 * MB) == 5);
+	MJ_CHECK(RefillAllowedUnderCap(900 * MB, 1000 * MB, false, 40 * MB));
+	MJ_CHECK(!RefillAllowedUnderCap(1000 * MB, 1000 * MB, false, 40 * MB));  // full: non-urgent waits
+	MJ_CHECK(RefillAllowedUnderCap(1000 * MB, 1000 * MB, true, 40 * MB));    // urgent: one track over the cap
+	MJ_CHECK(!RefillAllowedUnderCap(1040 * MB, 1000 * MB, true, 40 * MB));   // but only one
+
+	MJ_CHECK(ShouldPreempt("boss", false, "explore", true));
+	MJ_CHECK(!ShouldPreempt("boss", true, "explore", true));      // already cancelled once / urgent job
+	MJ_CHECK(!ShouldPreempt("explore", false, "explore", true));  // its own job
+	MJ_CHECK(!ShouldPreempt("", false, "explore", true));         // nothing running
+	MJ_CHECK(!ShouldPreempt("boss", false, "explore", false));    // not urgent
+
+	struct Cold
+	{
+		std::string fingerprint;
+		int         n;
+	};
+	std::deque<Cold> q{ { "old", 1 }, { "old", 2 }, { "new", 3 } };
+	PopStaleColdPicks(q, "new");
+	MJ_CHECK(q.size() == 1 && q.front().n == 3);
+	PopStaleColdPicks(q, "newer");
+	MJ_CHECK(q.empty());
+}
+
+// 1.0.1 default state: streaming unticked -> sources=library -> Harmony answers no_tracks -> vanilla with this text
+// (a 10-minute retry, not an error loop).
+MJ_TEST(Pool_NoTracksTextForTheDefaultState)
+{
+	MJ_CHECK(NoTracksProblem("library") == "No matching tracks in your library: tick Allow streaming to fetch from YouTube Music");
+	MJ_CHECK(NoTracksProblem("library,ytmusic") == "No matching tracks (try another selection)");
 }

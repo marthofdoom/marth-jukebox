@@ -364,6 +364,7 @@ namespace MJ::Retarget {
     }
 
     void OnDataLoaded() {
+        Pool::MarkGameThread();  // PerfProbe: the game thread's waits for the pool lock are measured from now on
         auto* dh = RE::TESDataHandler::GetSingleton();
         if (!dh || !dh->LookupModByName(kPluginName)) {
             spdlog::error("[retarget] DISABLED: {} is not in the load order (everything stays Vanilla)", kPluginName);

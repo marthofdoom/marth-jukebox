@@ -242,7 +242,19 @@ path as the INI, so they are on disk before the original is replaced). If `Load`
 an earlier copy) and refuses to save if that copy fails. A failed replace leaves the original untouched and
 removes the temp file.
 
-Defaults are safe: every environment Vanilla, and the network is off until a server URL is set
+First-run defaults (1.0.1, fresh install only: used when no INI exists; an existing INI keeps its meaning, an environment
+without a section stays Vanilla), both with streaming off, so they yield nothing until the player ticks streaming or has
+matching library tracks:
+
+| Environment | Mode | Selector | Service / Id | AllowStreaming | PoolSize |
+|---|---|---|---|---|---|
+| `explore` | Query | `Brass Fantasy Adventure` | - | 0 | 3 |
+| `town` | Artist | `Per-Olov Kindgren` | `ytmusic` / `UCL5frAZoI4rtafCi2BqPDAw` | 0 | 3 |
+
+An Artist or Playlist with a typed name but no picked suggestion (no service/id) is left out of the profile with the
+message "pick the artist from the suggestions": Harmony's selectors need the service id.
+
+Defaults are safe: every other environment Vanilla, and the network is off until a server URL is set
 (`NetworkActive()` = `Network` switch on AND `ServerUrl` non-empty). Values are clamped, with the reason logged.
 
 ### `[General]`

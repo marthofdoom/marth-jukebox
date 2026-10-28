@@ -79,6 +79,12 @@ old `MarthJukebox.esp` is replaced by the one in this zip.
 
 With no server address set, the plugin does nothing: all music stays vanilla and nothing touches the network.
 
+A fresh install (no `MarthJukebox.ini` yet) starts with two example environments, shown as normal rows in the page:
+**Exploration** = Query "Brass Fantasy Adventure" and **Towns and cities** = Artist "Per-Olov Kindgren" (YouTube Music).
+Both have **Allow streaming unticked**, so they play nothing until you tick it (or your library has matching tracks); the
+row then says "No matching tracks in your library: tick Allow streaming to fetch from YouTube Music". Change or reset them
+like any other environment. An existing settings file from 1.0.0 is not changed by this.
+
 1. Start the game and load into the world (or stay at the main menu).
 2. Open the SKSE Menu Framework panel. The framework's default key is **F1** (configurable in its own INI; on a controller
    it is a double press of LB, per its documentation). See the framework's page if the key is different on your setup.

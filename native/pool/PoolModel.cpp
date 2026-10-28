@@ -2,6 +2,7 @@
 #include "pool/PoolModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <system_error>
 #include <unordered_set>
@@ -322,6 +323,29 @@ namespace mj::pool
 		return !trimSilence || expectedS - decodedS > 30.0;
 	}
 
+	std::string NoTracksProblem(std::string_view sources)
+	{
+		if (sources == "library") {
+			return "No matching tracks in your library: tick Allow streaming to fetch from YouTube Music";
+		}
+		return "No matching tracks (try another selection)";
+	}
+
+	int CapAwareTarget(int base, int adaptive, std::uint64_t pooledBytes, std::uint64_t capBytes)
+	{
+		return pooledBytes < capBytes / 4 * 3 ? std::max(base, adaptive) : base;
+	}
+
+	bool RefillAllowedUnderCap(std::uint64_t pooledBytes, std::uint64_t capBytes, bool urgent, std::uint64_t oneTrackBytes)
+	{
+		return pooledBytes < capBytes || (urgent && pooledBytes < capBytes + oneTrackBytes);
+	}
+
+	bool ShouldPreempt(std::string_view jobEnv, bool jobUrgent, std::string_view env, bool envUrgent)
+	{
+		return envUrgent && !jobEnv.empty() && jobEnv != env && !jobUrgent;
+	}
+
 	bool IsHotEnvironment(std::string_view envId)
 	{
 		auto group = envId.substr(0, envId.find('.'));
@@ -333,9 +357,18 @@ namespace mj::pool
 		return IsHotEnvironment(envId) ? std::max(poolSize, kHotPoolMin) : poolSize;
 	}
 
-	bool UrgentRefill(std::string_view envId, int have)
+	bool UrgentRefill(std::string_view, int have)
 	{
-		return have <= 0 || (IsHotEnvironment(envId) && have < 2);
+		return have <= 1;
+	}
+
+	int AdaptivePoolSize(int base, double avgDownloadS, double avgTrackS)
+	{
+		if (!(avgDownloadS > 0.0) || !(avgTrackS > 1.0)) {
+			return base;
+		}
+		const int want = static_cast<int>(std::ceil(avgDownloadS / avgTrackS)) + 2;
+		return std::clamp(std::max(base, want), base, std::max(base, 8));
 	}
 
 	int RefillScore(std::string_view envId, int have, int target)

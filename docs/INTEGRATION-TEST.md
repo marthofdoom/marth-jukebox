@@ -34,6 +34,9 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
    earlier tracks being placed; every `[stall] ... gap ... ms` warning ends with `ours: ...` (whether a slot write or a
    download was running): a gap while ours says "idle" / "not downloading" is the game's own (autosave, loading).
    Each slot write line shows `decode+write N ms, manifest+rename N ms`.
+   Field #5: once a minute a `[perf] game thread in our watcher task` line (avg/max microseconds per tick, waits > 20 ms
+   for the pool lock). Stalls are ours only if that line shows long waits or a high max; `[stall]` lines also say whether
+   a loading screen was open.
 
 ## 2. Configure (menu or INI) (acceptance 3)
 1. Set ServerUrl + PersonalKey, and: `explore` = Genre (a genre the library really has; the picker lists them),

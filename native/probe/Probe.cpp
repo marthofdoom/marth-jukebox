@@ -226,6 +226,33 @@ namespace MJ::Probe {
                          StatusName(a_s.typeStatus));
         }
 
+        // Field #5 PerfProbe: the game thread's time inside OUR watcher task, reported once a minute at info, with the
+        // game thread's waits for the pool lock (Pool::TakeLockWaitStats). If these stay small while [stall] lines show
+        // 20 s gaps, the gaps are not ours.
+        long long g_perfTicks{ 0 }, g_perfSumUs{ 0 }, g_perfMaxUs{ 0 }, g_perfSinceMs{ -1 };
+
+        void PerfAccount(long long a_us) {
+            ++g_perfTicks;
+            g_perfSumUs += a_us;
+            g_perfMaxUs = (std::max)(g_perfMaxUs, a_us);
+            const long long now = NowMs();
+            if (g_perfSinceMs < 0) g_perfSinceMs = now;
+            if (now - g_perfSinceMs < 60'000) return;
+            const auto w = MJ::Pool::TakeLockWaitStats();
+            spdlog::info("[perf] game thread in our watcher task over {} s: {} ticks, avg {} us, max {} us; waits > 20 ms for the pool "
+                         "lock: {}{}",
+                         (now - g_perfSinceMs) / 1000, g_perfTicks, g_perfTicks ? g_perfSumUs / g_perfTicks : 0, g_perfMaxUs, w.count,
+                         w.count ? std::format(" (longest {} ms, held by {})", w.maxUs / 1000, w.holder) : std::string());
+            g_perfTicks = g_perfSumUs = g_perfMaxUs = 0;
+            g_perfSinceMs = now;
+        }
+
+        bool LoadingOpen() {
+            auto* ui = RE::UI::GetSingleton();
+            return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+        }
+        bool g_loadingLastTick{ false };
+
         // M0c stall detector: NowMs() of the previous watcher task (-1 before the first).
         long long g_prevTickMs{ -1 };
 
@@ -256,13 +283,17 @@ namespace MJ::Probe {
             // Gap between two consecutive watcher tasks (nominally 250 ms). Logged only when
             // > 400 ms: the main thread did not run SKSE tasks for that long.
             if (g_prevTickMs >= 0 && tickMs - g_prevTickMs > 400) {
-                const bool big = tickMs - g_prevTickMs > 5000;
+                const bool big     = tickMs - g_prevTickMs > 5000;
+                const bool loading = LoadingOpen();
                 spdlog::log(big ? spdlog::level::warn : spdlog::level::debug,
-                            "[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}{}{}",
+                            "[stall] main-thread tick gap {} ms (previous tick at +{}ms, this at +{}ms) current={} idx={} status={}{}{}{}",
                             tickMs - g_prevTickMs, g_prevTickMs, tickMs, TypeName(s.current), s.index, StatusName(s.typeStatus),
+                            big ? std::format(" | loading screen before/now: {}/{}", g_loadingLastTick ? "yes" : "no", loading ? "yes" : "no")
+                                : std::string(),
                             big ? " | ours: " : "", big ? MJ::Pool::PerfNow() : std::string());
             }
-            g_prevTickMs = tickMs;
+            g_prevTickMs      = tickMs;
+            g_loadingLastTick = LoadingOpen();
             LogNowPlaying(s);
             if (g_havePrev && s == g_prev) return;
             g_prev     = s;
@@ -313,9 +344,11 @@ namespace MJ::Probe {
                 if (const auto* tasks = SKSE::GetTaskInterface()) {
                     tasks->AddTask([] {
                         if (g_alive) {
+                            const auto t0 = std::chrono::steady_clock::now();
                             Tick();             // read-only probe
                             Retarget::Tick();   // the only engine-memory writer (guarded, see Retarget.cpp)
                             App::TickGameThread();  // queued "Harmony not reachable" notifications
+                            PerfAccount(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
                         }
                         g_taskPending = false;
                     });

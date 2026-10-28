@@ -352,7 +352,8 @@ MJ_TEST(Store_MissingFileGivesDefaultsAndWritesNothing)
 	SettingsStore st(dir.Path() / "sub" / "MarthJukebox.ini", dir.Path() / "cache");
 	MJ_CHECK(st.Load());
 	MJ_CHECK(!fs::exists(st.IniPath()));
-	MJ_CHECK(st.Snapshot()->environments.empty());
+	// 1.0.1: a missing file means a fresh install: the first-run example environments (still nothing written).
+	MJ_CHECK(st.Snapshot()->environments.size() == FirstRunSettings().environments.size());
 	MJ_CHECK(st.Revision() == 1);
 	MJ_CHECK(st.EffectiveCacheDir() == dir.Path() / "cache");
 }
@@ -752,4 +753,43 @@ MJ_TEST(Settings_OtherModsIdRefusesTableEdids)
 	Sanitize(s, d);
 	MJ_CHECK(s.environments.size() == 1 && s.Find("other.WTMUSExplore"));
 	MJ_CHECK(!d.empty());
+}
+
+// 1.0.1: the first-run defaults apply to a fresh install only; an existing INI keeps its meaning.
+MJ_TEST(Settings_FirstRunDefaultsOnlyForAFreshInstall)
+{
+	const Settings f = FirstRunSettings();
+	const auto*    ex = f.Find("explore");
+	const auto*    town = f.Find("town");
+	MJ_CHECK(ex && ex->mode == Mode::Query && ex->selector == "Brass Fantasy Adventure" && !ex->allowStreaming && ex->poolSize == 3);
+	MJ_CHECK(town && town->mode == Mode::Artist && town->selector == "Per-Olov Kindgren" && town->service == "ytmusic" &&
+			 town->id == "UCL5frAZoI4rtafCi2BqPDAw" && !town->allowStreaming && town->poolSize == 3);
+	MJ_CHECK(f.environments.size() == 2 && !NetworkActive(f));  // inert until a server URL is set
+	Diagnostics d;
+	Settings    c = f;
+	Sanitize(c, d);
+	MJ_CHECK_MSG(d.empty(), d.empty() ? "" : d.front());  // valid as shipped
+
+	{  // fresh store: no file -> the defaults, and the first save writes them
+		mjtest::ScratchDir dir;
+		SettingsStore      st(dir.Path() / "MJ.ini", dir.Path() / "cache");
+		(void)st.Load();
+		const auto s = st.Snapshot();
+		MJ_CHECK(s->Find("explore") && s->Find("explore")->mode == Mode::Query && s->Find("town") && s->Find("town")->mode == Mode::Artist);
+		MJ_CHECK(!fs::exists(dir.Path() / "MJ.ini"));  // nothing written by a load
+		std::string err;
+		MJ_CHECK(st.Save(&err));
+		SettingsStore again(dir.Path() / "MJ.ini", dir.Path() / "cache");
+		MJ_CHECK(again.Load() && again.Snapshot()->Find("town") && again.Snapshot()->Find("town")->id == "UCL5frAZoI4rtafCi2BqPDAw");
+	}
+	{  // an existing 1.0.0 INI without [Env:...] sections stays all Vanilla
+		mjtest::ScratchDir dir;
+		{
+			std::ofstream o(dir.Path() / "MJ.ini", std::ios::binary);
+			o << "[General]\nServerUrl=http://music.example.lan:8080\n";
+		}
+		SettingsStore st(dir.Path() / "MJ.ini", dir.Path() / "cache");
+		MJ_CHECK(st.Load());
+		MJ_CHECK(st.Snapshot()->environments.empty());
+	}
 }
