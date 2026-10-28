@@ -83,6 +83,8 @@ namespace MJ::Pool::detail {
         bool                        poolWake = false;   // MarkDirtyLocked / new pool work: wake the pool thread once
         bool                        replanWanted = false;  // the kill-switch file changed (slot thread poll)
         std::stop_source            jobStop;            // the pool thread's current network job (A-F3)
+        std::string                 netUrl, netKey;     // what the pool client is configured with (Deck fix)
+        std::string                 jobEnv, jobFp;      // environment + fingerprint the current refill job works for
         std::deque<std::string>     toasts;             // in-game notifications for the game thread
         std::map<std::string, std::string> playedTitles; // "service:id" -> "Artist - Title" of served tracks (replay lines)
         bool                        clearCacheRequested = false;

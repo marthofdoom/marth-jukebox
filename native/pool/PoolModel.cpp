@@ -258,6 +258,50 @@ namespace mj::pool
 		return dropped;
 	}
 
+	std::string EnvFingerprint(const config::Settings& s, std::string_view envId, bool serverAcceptsList)
+	{
+		const auto* e = s.Find(envId);
+		if (!e || e->mode == config::Mode::Vanilla) {
+			return {};
+		}
+		return Fingerprint(envId, *e, config::ChooseSources(s, *e, serverAcceptsList).sources);
+	}
+
+	bool DownloadStillValid(const config::Settings& s, std::string_view url, std::string_view key, std::string_view envId,
+		std::string_view fingerprint, bool serverAcceptsList)
+	{
+		if (!config::NetworkActive(s) || s.global.serverUrl != url || s.global.personalKey != key) {
+			return false;
+		}
+		const auto fp = EnvFingerprint(s, envId, serverAcceptsList);
+		return !fp.empty() && fp == fingerprint;
+	}
+
+	DiskUsage MeasureDisk(const fs::path& cacheDir, const std::vector<fs::path>& extra)
+	{
+		DiskUsage       d;
+		std::error_code ec;
+		for (fs::directory_iterator it(cacheDir, ec), end; !ec && it != end; it.increment(ec)) {
+			std::error_code e2;
+			if (!IsCacheFileName(it->path().filename().string()) || !it->is_regular_file(e2)) {
+				continue;
+			}
+			const auto sz = it->file_size(e2);
+			if (!e2) {
+				d.cacheBytes += sz;
+				++d.cacheFiles;
+			}
+		}
+		for (const auto& p : extra) {
+			std::error_code e2;
+			const auto      sz = fs::file_size(p, e2);
+			if (!e2) {
+				d.extraBytes += sz;
+			}
+		}
+		return d;
+	}
+
 	bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key)
 	{
 		const auto it = index.recent.find(envId);

@@ -44,7 +44,9 @@ namespace mj::config
 		std::set<std::string>       publishedTypes;  // environment ids present in `json`
 		std::vector<ProfileProblem> problems;
 	};
-	[[nodiscard]] ProfileBuild BuildProfile(const Settings& settings);
+	// `logProblems` = false: problems are only returned, never logged (the menu's 4 Hz status refresh and the pool
+	// thread, which logs each distinct problem once itself; Deck field log 2026-10-27: 110 repeated warnings).
+	[[nodiscard]] ProfileBuild BuildProfile(const Settings& settings, bool logProblems = true);
 
 	// Convenience wrapper: returns the JSON text, or an empty string when there is nothing to publish (every environment is
 	// Vanilla or invalid; Harmony requires at least one type). Problems are appended to `problems` and

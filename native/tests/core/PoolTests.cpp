@@ -5,6 +5,7 @@
 #include "pool/PoolModel.h"
 
 #include <fstream>
+#include <functional>
 #include <map>
 
 using namespace mj::pool;
@@ -272,4 +273,126 @@ MJ_TEST(Pool_SmallSelectionPlaysThroughTwice)
 		MJ_CHECK_MSG(n >= 1 && n <= 3, k + " played " + std::to_string(n) + " times");
 	}
 	MJ_CHECK(sawRepeatFlag);
+}
+
+// marth 2026-10-27: "downloads should only be dumped if the changed setting invalidates them".
+namespace
+{
+	mj::config::Settings Base()
+	{
+		mj::config::Settings s;
+		s.global.serverUrl   = "http://music.example.lan:8080";
+		s.global.personalKey = "k";
+		auto& ex             = s.environments["explore"];
+		ex.mode              = mj::config::Mode::Genre;
+		ex.selector          = "ambient";
+		ex.allowStreaming    = true;
+		auto& co             = s.environments["combat"];
+		co.mode              = mj::config::Mode::Query;
+		co.selector          = "epic battle";
+		return s;
+	}
+
+	std::map<std::string, std::string> Wanted(const mj::config::Settings& s)
+	{
+		std::map<std::string, std::string> w;
+		for (const auto& [id, e] : s.environments) {
+			if (const auto f = EnvFingerprint(s, id, true); !f.empty()) {
+				w[id] = f;
+			}
+		}
+		return w;
+	}
+
+	using Edit = std::pair<const char*, std::function<void(mj::config::Settings&)>>;
+}
+
+MJ_TEST(Pool_OnlyInvalidatingChangesTouchAnEnvironment)
+{
+	using mj::config::Mode;
+	const auto s0  = Base();
+	const auto fpE = EnvFingerprint(s0, "explore", true);
+	const auto fpC = EnvFingerprint(s0, "combat", true);
+	const std::string url = "http://music.example.lan:8080";
+	MJ_CHECK(!fpE.empty() && !fpC.empty() && EnvFingerprint(s0, "boss", true).empty());
+
+	// Changes that must NOT touch explore's pool, slot or running download.
+	const std::vector<Edit> keep = {
+		{ "other environment toggled", [](mj::config::Settings& s) { s.environments["combat"].mode = Mode::Vanilla; } },
+		{ "preset fills other environments",
+			[](mj::config::Settings& s) {
+				s.environments["dungeon"].mode     = Mode::Genre;
+				s.environments["dungeon"].selector = "dark";
+				s.environments["boss"].mode        = Mode::Query;
+				s.environments["boss"].selector    = "boss fight";
+			} },
+		{ "pool size grows", [](mj::config::Settings& s) { s.environments["explore"].poolSize = 8; } },
+		{ "pool size shrinks", [](mj::config::Settings& s) { s.environments["explore"].poolSize = 3; } },
+		{ "remember place", [](mj::config::Settings& s) { s.environments["explore"].rememberPlace = true; } },
+		{ "toasts and log level",
+			[](mj::config::Settings& s) {
+				s.global.toastEnabled         = false;
+				s.global.toastIntervalMinutes = 30;
+				s.global.logLevel             = mj::config::LogLevel::Debug;
+			} },
+		{ "cache cap", [](mj::config::Settings& s) { s.global.cacheCapMB = 8192; } },
+	};
+	for (const auto& [what, fn] : keep) {
+		auto s = s0;
+		fn(s);
+		MJ_CHECK_MSG(EnvFingerprint(s, "explore", true) == fpE, what);
+		MJ_CHECK_MSG(DownloadStillValid(s, url, "k", "explore", fpE, true), what);
+		PoolIndex idx;
+		idx.pools["explore"].fingerprint = fpE;
+		idx.pools["explore"].entries     = { Entry("local", "a", 1), Entry("local", "b", 1), Entry("local", "c", 1) };
+		(void)DropChangedPools(idx, Wanted(s));
+		MJ_CHECK_MSG(idx.pools.contains("explore") && idx.pools["explore"].entries.size() == 3, what);  // nothing dumped
+	}
+
+	// Changes that DO invalidate explore, and only explore.
+	const std::vector<Edit> drop = {
+		{ "selector", [](mj::config::Settings& s) { s.environments["explore"].selector = "folk"; } },
+		{ "mode", [](mj::config::Settings& s) { s.environments["explore"].mode = Mode::Query; } },
+		{ "streaming consent", [](mj::config::Settings& s) { s.environments["explore"].allowStreaming = false; } },
+		{ "AllowQobuz while streaming", [](mj::config::Settings& s) { s.global.allowQobuz = true; } },
+		{ "set to Vanilla", [](mj::config::Settings& s) { s.environments["explore"].mode = Mode::Vanilla; } },
+	};
+	for (const auto& [what, fn] : drop) {
+		auto s = s0;
+		fn(s);
+		MJ_CHECK_MSG(!DownloadStillValid(s, url, "k", "explore", fpE, true), what);
+		MJ_CHECK_MSG(DownloadStillValid(s, url, "k", "combat", fpC, true), what);  // the other environment is untouched
+		PoolIndex idx;
+		idx.pools["explore"].fingerprint = fpE;
+		idx.pools["combat"].fingerprint  = fpC;
+		(void)DropChangedPools(idx, Wanted(s));
+		MJ_CHECK_MSG(!idx.pools.contains("explore") && idx.pools.contains("combat"), what);
+	}
+	// AllowQobuz does not matter for an environment without streaming.
+	auto q = s0;
+	q.global.allowQobuz = true;
+	MJ_CHECK(EnvFingerprint(q, "combat", true) == fpC);
+
+	// Server / key / network: every download is invalid (the client is re-configured).
+	auto u = s0;
+	u.global.serverUrl = "http://other.lan:8080";
+	MJ_CHECK(!DownloadStillValid(u, url, "k", "combat", fpC, true));
+	MJ_CHECK(!DownloadStillValid(s0, url, "other-key", "combat", fpC, true));
+	auto n = s0;
+	n.global.features.network = false;
+	MJ_CHECK(!DownloadStillValid(n, url, "k", "combat", fpC, true));
+}
+
+MJ_TEST(Pool_MeasureDiskCountsCacheAndSlotFiles)
+{
+	mjtest::ScratchDir dir;
+	const auto         cache = dir.Path() / "cache";
+	fs::create_directories(cache);
+	WriteBytes(cache / CacheFileName("local", "a", "flac"), 100);
+	WriteBytes(cache / CacheFileName("local", "b", "wav"), 50);
+	WriteBytes(cache / "index.json", 7);                                       // not a cache file
+	WriteBytes(cache / (CacheFileName("local", "c", "wav") + ".part"), 999);  // a partial download: not counted
+	WriteBytes(dir.Path() / "slot_00.wav", 30);
+	const auto d = MeasureDisk(cache, { dir.Path() / "slot_00.wav", dir.Path() / "slot_01.wav" });
+	MJ_CHECK(d.cacheBytes == 150 && d.cacheFiles == 2 && d.extraBytes == 30);
 }

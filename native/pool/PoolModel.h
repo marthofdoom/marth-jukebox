@@ -85,6 +85,27 @@ namespace mj::pool
 	// become ordinary LRU cache files). Returns the dropped environment ids. Recent lists are kept.
 	std::vector<std::string> DropChangedPools(PoolIndex& index, const std::map<std::string, std::string>& wanted);
 
+	// The fingerprint an environment has under `s` (selector + `sources` from its streaming consent and the server's
+	// capabilities), or "" when it is not configured or Vanilla. Settings that do not decide WHICH tracks are valid
+	// (pool size, remember-place, toasts, log level, other environments) never change it.
+	[[nodiscard]] std::string EnvFingerprint(const config::Settings& s, std::string_view envId, bool serverAcceptsList);
+
+	// marth 2026-10-27: "downloads should only be dumped if the changed setting invalidates them". True when a pick that
+	// is being downloaded for `envId` with `fingerprint` is still wanted under the new settings `s`: same server URL and
+	// key as the running client (`url`, `key`), network on, and the environment's fingerprint unchanged.
+	[[nodiscard]] bool DownloadStillValid(const config::Settings& s, std::string_view url, std::string_view key, std::string_view envId,
+		std::string_view fingerprint, bool serverAcceptsList);
+
+	// Bytes on disk of our cache files in `cacheDir` (IsCacheFileName only) plus the given extra files (slot files);
+	// missing files count 0. Pure file stats (worker thread).
+	struct DiskUsage
+	{
+		std::uint64_t cacheBytes = 0;
+		std::size_t   cacheFiles = 0;
+		std::uint64_t extraBytes = 0;
+	};
+	[[nodiscard]] DiskUsage MeasureDisk(const std::filesystem::path& cacheDir, const std::vector<std::filesystem::path>& extra);
+
 	// ---- recent-played list (per environment, bounded) -------------------------------------------
 	[[nodiscard]] bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key);
 	void               AddRecent(PoolIndex& index, std::string_view envId, std::string_view key);

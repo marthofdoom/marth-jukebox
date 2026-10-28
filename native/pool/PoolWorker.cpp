@@ -137,6 +137,17 @@ namespace MJ::Pool {
             if (n) spdlog::info("[cache] removed {} leftover partial file(s)", n);
         }
 
+        // App::CacheBytes() = our cache files (pooled, slotted and LRU) + the 24 slot files under Data\Music\Harmony,
+        // i.e. everything this mod keeps on disk for music. Re-measured after every refill step, eviction and Clear
+        // cache, and every few seconds (slot writes) (Deck review: the number was only recomputed in EnforceCap).
+        void MeasureDiskNow() {
+            auto&                              s = S();
+            std::vector<fs::path>              slots;
+            for (int i = 0; i < kSlots; ++i) slots.push_back(Slots::HarmonyDir() / mj::retarget::SlotFileName(i));
+            const auto d = mj::pool::MeasureDisk(s.cacheDir, slots);
+            s.cacheBytes = d.cacheBytes + d.extraBytes;
+        }
+
         // Deletes unprotected cache files, least recently used first, down to `a_cap` (0 = all of them).
         void EnforceCap(std::uint64_t a_cap, const char* a_why) {
             auto&                            s = S();
@@ -174,7 +185,8 @@ namespace MJ::Pool {
             }
             if (!victims.empty())
                 spdlog::info("[cache] {}: deleted {} file(s), {:.1f} MB freed", a_why, victims.size(), freed / 1048576.0);
-            s.cacheBytes = total > freed ? total - freed : 0;
+            (void)total;
+            MeasureDiskNow();
         }
 
         // ---------------------------------------------------------------- pool thread state
@@ -199,6 +211,7 @@ namespace MJ::Pool {
             std::map<std::string, int>  prevSlots;
             std::uint64_t               planGen = 0;
             mj::pool::ToastPolicy       toast;
+            std::set<std::string>       loggedProblems;  // profile problems already logged (logged again only after they cleared)
         };
 
         void ToastNetFailure(NetState& ns) { QueueToast(ns.toast.OnNetworkFailure(SteadyMs())); }
@@ -297,6 +310,8 @@ namespace MJ::Pool {
                                                      ? "Streaming needs Harmony 1.0.13+ (or AllowQobuz=1 in the INI); playing from your library only"
                                                      : "";
                 }
+                for (auto& [id, es] : s.envs)
+                    if (!plan->envs.contains(id)) es.nowPlaying.clear();  // not playing from Harmony any more
                 s.plan = plan;
             }
             for (const auto& d : dropped) spdlog::info("[pool] pool {} dropped (selector, sources or mode changed, or now Vanilla)", d);
@@ -318,10 +333,16 @@ namespace MJ::Pool {
             ns.snap  = s.store->Snapshot();
             ns.seenRev = s.store->Revision();
             ApplyLogLevel(*ns.snap);
-            ns.build = mj::config::BuildProfile(*ns.snap);
-            for (const auto& p : ns.build.problems)
-                spdlog::warn("[profile] {}{}: {}", p.environment.empty() ? "(profile)" : p.environment,
-                             p.severity == mj::config::ProblemSeverity::Error ? " (left Vanilla)" : "", p.message);
+            ns.build = mj::config::BuildProfile(*ns.snap, false);
+            // Each distinct problem is logged once, not on every settings change (Deck field log).
+            std::set<std::string> now;
+            for (const auto& p : ns.build.problems) {
+                const auto line = std::format("{}{}: {}", p.environment.empty() ? "(profile)" : p.environment,
+                                              p.severity == mj::config::ProblemSeverity::Error ? " (left Vanilla)" : "", p.message);
+                now.insert(line);
+                if (!ns.loggedProblems.contains(line)) spdlog::warn("[profile] {}", line);
+            }
+            ns.loggedProblems = std::move(now);
             ns.needProfile     = true;
             ns.profileOk       = false;
             ns.profileRejected = false;
@@ -357,6 +378,9 @@ namespace MJ::Pool {
                 ns.clientOk   = r.Ok();
                 ns.cfgUrl     = c.baseUrl;
                 ns.cfgKey     = c.personalKey;
+                std::scoped_lock lk(s.mx);
+                s.netUrl = c.baseUrl;
+                s.netKey = c.personalKey;
                 ns.connected  = false;
                 if (!r.Ok()) {
                     SetConn(true, false, "The server address is not valid: " + r.message);
@@ -503,11 +527,19 @@ namespace MJ::Pool {
         }
 
         // Settings changed, kill switch, clear-cache, stop: the current refill must yield (A-F3).
-        bool AbortWanted(const NetState& ns, const std::stop_token& a_st) {
-            auto&            s = S();
+        // Between two picks of one refill: stop only when this environment's picks are no longer wanted (its selector,
+        // sources or streaming consent changed, the server/key changed, the network went off), or for the kill switch,
+        // Clear cache or shutdown. Edits of other environments, pool size, toasts... let the refill go on (marth: "only
+        // dump downloads if the changed setting invalidates them").
+        bool AbortWanted(const NetState& ns, const EnvPlan& a_ep, const std::stop_token& a_st) {
+            auto& s = S();
+            if (a_st.stop_requested() || s.killFile.load()) return true;
+            const auto snap = s.store->Snapshot();
             std::scoped_lock lk(s.mx);
-            return a_st.stop_requested() || s.settingsDirty || s.replanWanted || s.clearCacheRequested || s.killFile.load() ||
-                   s.store->Revision() != ns.seenRev;
+            if (s.clearCacheRequested) return true;
+            if (snap->revision == ns.snap->revision) return false;
+            return !mj::pool::DownloadStillValid(*snap, s.netUrl, s.netKey, a_ep.id, a_ep.fingerprint,
+                                                 ns.statusKnown && ns.status.servicesReported);
         }
 
         void Reject(const std::string& a_env, const std::string& a_key, long long a_ms) {
@@ -556,6 +588,18 @@ namespace MJ::Pool {
             }
             if (!pick) return false;
             const EnvPlan ep   = *pick;  // copy: the plan pointer stays alive anyway
+            {
+                std::scoped_lock lk(s.mx);  // what SettingsChanged() checks before cancelling this job
+                s.jobEnv = ep.id;
+                s.jobFp  = ep.fingerprint;
+            }
+            struct JobClear {
+                ~JobClear() {
+                    std::scoped_lock lk(S().mx);
+                    S().jobEnv.clear();
+                    S().jobFp.clear();
+                }
+            } jobClear;
             const int     need = ep.poolSize - have;
             const bool    flac = ns.snap->global.features.flac && ns.statusKnown &&
                               std::find(ns.status.containers.begin(), ns.status.containers.end(), "flac") != ns.status.containers.end();
@@ -648,7 +692,7 @@ namespace MJ::Pool {
                              pairs.size() - ok.size(), pairs.size());
             int added = 0;
             for (const auto i : ok) {
-                if (AbortWanted(ns, a_st)) return true;
+                if (AbortWanted(ns, ep, a_st)) return true;
                 const auto&       t    = nr.tracks[i];
                 const std::string cont = ContainerOf(t.audioUrl);
                 const std::string file = mj::pool::CacheFileName(t.service, t.id, cont);
@@ -744,8 +788,7 @@ namespace MJ::Pool {
                                                      "MarthJukebox.log); retrying" : "");
             }
             if (ok.empty()) EnvBackoff(ep.id, 20'000, "");  // nothing usable came back: let the server's bag move on
-            EnforceCap(S().capBytes, "cache cap");
-            return true;
+            return true;  // the pool thread's loop enforces the cap and re-measures the disk after every step
         }
 
     }  // namespace
@@ -780,6 +823,7 @@ namespace MJ::Pool {
             if (Slots::KillSwitchFilePresent() && !s.killFile.exchange(true))
                 spdlog::warn("[retarget] KILL SWITCH file present: no retarget this session (until it is removed)");
 
+            long long lastMeasure = SteadyMs();
             while (!a_st.stop_requested()) {
                 bool dirty = false, clear = false, cat = false, replan = false;
                 // A fresh per-job stop source (NET-CLIENT.md): SettingsChanged() / the kill switch cancel only this job.
@@ -806,6 +850,10 @@ namespace MJ::Pool {
                 bool worked = false;
                 if (EnsureConnected(ns, job.get_token())) worked = RefillOnce(ns, job.get_token());
                 SaveIndexIfDirty();
+                if (worked || SteadyMs() - lastMeasure >= 5000) {
+                    lastMeasure = SteadyMs();
+                    EnforceCap(s.capBytes, "cache cap");  // also re-measures CacheBytes()
+                }
                 if (worked) continue;
                 std::unique_lock lk(s.mx);
                 (void)s.poolCv.wait_for(lk, a_st, 1000ms, [&] {
@@ -854,10 +902,20 @@ namespace MJ::Pool {
     }
 
     void SettingsChanged() {
-        auto&            s = S();
+        auto&      s    = S();
+        const auto snap = s.store ? s.store->Snapshot() : nullptr;
         std::scoped_lock lk(s.mx);
         s.settingsDirty = true;
-        s.jobStop.request_stop();  // signal only: a download in flight returns kCancelled at once (A-F3)
+        // Cancel the download in flight ONLY when it cannot be used any more: the server address or key changed, or
+        // the network was switched off. Any other edit (a selector, a checkbox, typing in the menu) lets it finish; a
+        // track whose selection changed meanwhile simply stays in the cache (Deck field log: 4 of 32 downloads were
+        // cancelled by unrelated menu edits). The refill re-checks the settings between picks (AbortWanted).
+        const bool serverSame = snap && mj::config::NetworkActive(*snap) && snap->global.serverUrl == s.netUrl &&
+                                snap->global.personalKey == s.netKey;
+        const bool jobValid   = s.jobEnv.empty() ? serverSame
+                                                 : mj::pool::DownloadStillValid(*snap, s.netUrl, s.netKey, s.jobEnv, s.jobFp,
+                                                                                s.conn.servicesReported);
+        if (!jobValid) s.jobStop.request_stop();  // signal only: a download in flight returns kCancelled at once
         s.poolCv.notify_all();
     }
 

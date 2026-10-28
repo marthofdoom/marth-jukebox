@@ -105,13 +105,16 @@ namespace mj::config
 		struct Ctx
 		{
 			std::vector<ProfileProblem>* out;
+			bool                         log = true;
 			void Add(const std::string& env, ProblemSeverity sev, const std::string& msg) const
 			{
 				if (out) {
 					out->push_back({ env, sev, msg });
 				}
-				Log(sev == ProblemSeverity::Error ? spdlog::level::warn : spdlog::level::info,
-					"profile: " + (env.empty() ? std::string("profile") : env) + ": " + msg);
+				if (log) {
+					Log(sev == ProblemSeverity::Error ? spdlog::level::warn : spdlog::level::info,
+						"profile: " + (env.empty() ? std::string("profile") : env) + ": " + msg);
+				}
 			}
 		};
 
@@ -188,10 +191,10 @@ namespace mj::config
 		return r;
 	}
 
-	ProfileBuild BuildProfile(const Settings& settings)
+	ProfileBuild BuildProfile(const Settings& settings, bool logProblems)
 	{
 		ProfileBuild out;
-		const Ctx ctx{ &out.problems };
+		const Ctx ctx{ &out.problems, logProblems };
 		json types = json::object();
 
 		if (!ValidTypeName(settings.global.harmonyProfileName)) {
