@@ -158,7 +158,12 @@ checkbox then also lets Harmony use Qobuz.
 Global settings (page section **Pool and cache** and **Advanced**):
 
 - **Tracks kept ready per environment** (pool size): 3, 5 or 8. Default 3.
-- **Cache size limit**: default 4096 MB (4 GB), minimum 256 MB (`CacheCapMB` in the INI).
+- **Cache size limit**: default 4096 MB (4 GB), minimum 256 MB (`CacheCapMB` in the INI). The limit applies to the
+  downloaded tracks; the slot files (below) come on top.
+- **Cache on disk** (the number shown in the page): everything this mod keeps on disk for music, i.e. the downloaded
+  tracks in the cache folder PLUS the slot files under `Music/Harmony`. It is re-measured after every download and every
+  few seconds. "2 of 3 ready" counts the tracks waiting in that environment's pool, including the one already placed in
+  its slot file for the next play; a track still downloading is not counted.
 - **Clear cache**: deletes downloaded tracks that are not in use (they are fetched again when needed). Asks you to click twice.
 - **Log level** and the kill switches (see below).
 
