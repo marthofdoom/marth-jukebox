@@ -22,7 +22,7 @@ Parallel, already running: Harmony `game-pools` (variety). Done: Harmony FLAC co
 - Updating the production Harmony server with the merged FLAC work and, later, `game-pools`.
 - Which of FLAC / ADPCM ships (FLAC is built; ADPCM only if the engine accepts it and disk matters).
 
-## 1.0.1 (after 1.0.0 ships)
+## Next release (was planned as 1.0.1; 1.0.1 shipped as the defaults/refill/diagnostics release, so this becomes 1.0.2)
 - **Mixed mode (marth 2026-10-27): vanilla + the query.** Per environment, a "Mix" option: the environment keeps
   its vanilla songs AND plays Harmony tracks from the selector, interleaved. Design notes: the in-place retarget
   already leaves unreplaced entries untouched, so Mix = replace only a share of the replaceable (Single/Palette)
