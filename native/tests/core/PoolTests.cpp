@@ -420,3 +420,15 @@ MJ_TEST(Pool_RefillPolicy)
 	MJ_CHECK(order.size() == 2 && order[0] == "local:a" && order[1] == "local:b");
 	MJ_CHECK(ReplayOrder(idx, "explore", "").empty());
 }
+
+// Review R5-4: the preview guard with and without trim_silence.
+MJ_TEST(Pool_PreviewGuardWithTrim)
+{
+	MJ_CHECK(PreviewOrTruncated(30.0, 224.0, false));   // Qobuz preview
+	MJ_CHECK(PreviewOrTruncated(30.0, 224.0, true));    // still caught with trim on
+	MJ_CHECK(PreviewOrTruncated(190.0, 224.0, false));  // 85%: too short without trim
+	MJ_CHECK(PreviewOrTruncated(190.0, 224.0, true));   // 85% and 34 s short: still rejected with trim
+	MJ_CHECK(!PreviewOrTruncated(200.0, 224.0, true));  // 89%, 24 s of trimmed silence: accepted with trim
+	MJ_CHECK(!PreviewOrTruncated(210.0, 224.0, false)); // 94%: fine either way
+	MJ_CHECK(!PreviewOrTruncated(40.0, 59.0, false));   // tracks up to 60 s are not checked
+}

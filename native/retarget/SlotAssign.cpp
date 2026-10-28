@@ -74,6 +74,14 @@ namespace mj::retarget
 		return fresh || replay || (servedAtMs >= 0 && nowMs - servedAtMs < graceMs);
 	}
 
+	DryPoolAction ChooseDryPoolAction(bool otherCachedCandidate, bool slotHoldsEnvTrack)
+	{
+		if (otherCachedCandidate) {
+			return DryPoolAction::PlaceReplay;
+		}
+		return slotHoldsEnvTrack ? DryPoolAction::RepeatCurrent : DryPoolAction::Fail;
+	}
+
 	std::string SlotFileName(int slot)
 	{
 		char b[32];

@@ -87,3 +87,52 @@ MJ_TEST(Slots_ReadyDecision)
 	MJ_CHECK(!SlotReady("explore", "combat", true, false, false, -1, 0));     // the file belongs to another environment
 	MJ_CHECK(!SlotReady("", "combat", true, false, false, -1, 0));            // unknown content (placeholder)
 }
+
+// Review R5-1: one cached track, pool dry, several plays: the slot stays ready the whole time (no restore/re-bind flap,
+// so no engine-write storm), and it is only "failing" when the slot holds nothing of the environment.
+MJ_TEST(Slots_DryPoolNoFlap)
+{
+	MJ_CHECK(ChooseDryPoolAction(true, true) == DryPoolAction::PlaceReplay);
+	MJ_CHECK(ChooseDryPoolAction(true, false) == DryPoolAction::PlaceReplay);
+	MJ_CHECK(ChooseDryPoolAction(false, true) == DryPoolAction::RepeatCurrent);
+	MJ_CHECK(ChooseDryPoolAction(false, false) == DryPoolAction::Fail);
+
+	// The slot thread's state for one slot, driven tick by tick like SlotFiller + the game thread's SlotReady.
+	struct State
+	{
+		std::string owner = "combat";
+		bool        fresh = true, replay = false, failing = false;
+		long long   servedAt = -1;
+	} st;
+	int       bindingChanges = 0;
+	bool      bound          = SlotReady(st.owner, "combat", st.fresh, st.replay, st.failing, st.servedAt, 0);
+	long long now            = 0;
+	for (int play = 0; play < 6; ++play) {
+		now += 60'000;  // a fight every minute
+		st.fresh    = false;  // play event: the content is served
+		st.servedAt = now;
+		for (int tick = 1; tick <= 400; ++tick) {  // the next 100 s, 250 ms ticks
+			const long long t = now + tick * 250;
+			if (tick == 6) {  // 1.5 s later: the refill; the pool is dry and nothing else is cached
+				switch (ChooseDryPoolAction(false, st.owner == "combat")) {
+				case DryPoolAction::RepeatCurrent:
+					st.replay  = true;
+					st.failing = false;
+					break;
+				case DryPoolAction::Fail:
+					st.failing = true;
+					break;
+				case DryPoolAction::PlaceReplay:
+					break;
+				}
+			}
+			const bool ready = SlotReady(st.owner, "combat", st.fresh, st.replay, st.failing, st.servedAt, t);
+			if (ready != bound) {
+				++bindingChanges;
+				bound = ready;
+			}
+		}
+	}
+	MJ_CHECK_MSG(bindingChanges == 0, std::to_string(bindingChanges) + " restore/re-bind changes");
+	MJ_CHECK(bound);
+}

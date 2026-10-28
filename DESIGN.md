@@ -193,7 +193,8 @@ sharing violation is retried, never forced) and 48 kHz files in the field (Harmo
 picks but never starves a small selection: when only recently played tracks come back, the least recently played is
 taken and the menu says "Small selection: tracks will repeat"; a failed download is skipped for a while but never
 counts as played. When Harmony is down and a pool runs dry during play, recently played cached tracks rotate, DESIGN
-3 item 4.) A player who picks a genre should
+3 item 4. Deliberate since field #4: when a pool runs dry while the network is fine, the game repeats cached tracks of that
+environment, even the only one, instead of falling back to vanilla.) A player who picks a genre should
 essentially never hear a repeat. Two layers:
 - **Harmony (branch `game-pools`)**: deeper streaming candidate lists (paging past 25 per query, a few query
   variants, mood/genre playlists where the provider allows), cross-service de-duplication, and a bag whose

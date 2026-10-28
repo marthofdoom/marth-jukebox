@@ -192,8 +192,23 @@ namespace MJ::Slots {
                 it->second.file.empty())
                 continue;
             std::uint64_t cur = 0;
-            if (FileSize(SlotPath(s), cur) && cur == *it->second.sizes.begin())
-                out[s] = { it->second.env, it->second.key, it->second.file, cur };
+            if (!FileSize(SlotPath(s), cur) || cur != *it->second.sizes.begin()) continue;
+            // Review R5-3: slot files are written without fsync; after a power loss one may have its size but zeros.
+            std::uint8_t head[44]{};
+            DWORD        got = 0;
+            HANDLE       h   = ::CreateFileW(SlotPath(s).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h != INVALID_HANDLE_VALUE) {
+                if (!::ReadFile(h, head, sizeof head, &got, nullptr)) got = 0;
+                ::CloseHandle(h);
+            }
+            if (got != sizeof head || !mj::pool::IsCanonicalSlotHeader(head, cur)) {
+                spdlog::error("[slots] {} has the recorded size but not the header this plugin writes (damaged, e.g. by a power loss): "
+                              "treated as unknown, it is rewritten",
+                              Utf8(SlotPath(s)));
+                continue;
+            }
+            out[s] = { it->second.env, it->second.key, it->second.file, cur };
         }
         spdlog::info("[slots] slot manifest: {} slot file(s) recorded as written by the plugin, {} with a known track", g_manifest.size(),
                      out.size());
@@ -267,10 +282,13 @@ namespace MJ::Slots {
     void DiscardTmp(int a_slot) { ::DeleteFileW(TmpPath(a_slot).c_str()); }
 
     void LowerCurrentThreadPriority(const char* a_name) {
-        const bool bg  = ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != 0;
         const bool low = ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) != 0;
-        spdlog::info("[perf] {} thread: background IO mode {}, priority below normal {}", a_name, bg ? "on" : "unavailable",
-                     low ? "on" : "unavailable");
+        spdlog::info("[perf] {} thread: priority below normal {}", a_name, low ? "on" : "unavailable");
+    }
+
+    BackgroundIo::BackgroundIo() { on = ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != 0; }
+    BackgroundIo::~BackgroundIo() {
+        if (on) ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
     }
 
     PrepResult PrepareSlot(int a_slot, const fs::path& a_src, std::stop_token a_st) {
@@ -296,7 +314,10 @@ namespace MJ::Slots {
         // 2. Decode / copy into the .tmp as a canonical WAV, flushed to disk.
         // Not durable (no fsync) and paced: a slot file is recreatable (a crash leaves at worst a size the manifest does not
         // list or content the pool still has), and a 60 MB synchronous flush on the game's disk can stall its streaming.
-        const auto cr = mj::pool::ConvertToCanonicalWav(a_src, tmp, a_st, false);
+        const auto cr = [&] {
+            BackgroundIo bg;  // lock-free and log-free section only (review R5-2)
+            return mj::pool::ConvertToCanonicalWav(a_src, tmp, a_st, false);
+        }();
         if (!cr.ok) {
             ::DeleteFileW(tmp.c_str());
             r.sourceError = cr.sourceError;

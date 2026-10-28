@@ -349,6 +349,19 @@ namespace mj::pool
 		return b;
 	}
 
+	bool IsCanonicalSlotHeader(std::span<const std::uint8_t> head, std::uint64_t fileSize)
+	{
+		if (head.size() < 44 || fileSize < 44) {
+			return false;
+		}
+		WavLayout   L;
+		std::string err;
+		if (!ParseWav(head.first(44), fileSize, L, err) || L.dataOffset != 44 || L.dataBytes != fileSize - 44) {
+			return false;
+		}
+		return EnginePlayable(L.fmt, err);
+	}
+
 	bool EnginePlayable(const PcmFormat& f, std::string& why)
 	{
 		if (f.bits != 16) {

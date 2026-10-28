@@ -506,14 +506,14 @@ namespace MJ::Pool {
             return path.ends_with(".flac") ? "flac" : "wav";
         }
 
-        // Full decode check + the preview guard (DESIGN 8.8). True = acceptable.
-        bool ValidateFile(const fs::path& a_p, double a_expectedS, std::string& a_why, const std::stop_token& a_st) {
+        // Full decode check + the preview guard (DESIGN 8.8; with trim_silence the R5-4 rule). True = acceptable.
+        bool ValidateFile(const fs::path& a_p, double a_expectedS, std::string& a_why, const std::stop_token& a_st, bool a_trim) {
             const auto r = mj::pool::ConvertToCanonicalWav(a_p, {}, a_st);
             if (!r.ok) {
                 a_why = r.error;
                 return false;
             }
-            if (a_expectedS > 60.0 && r.durationS < 0.9 * a_expectedS) {
+            if (mj::pool::PreviewOrTruncated(r.durationS, a_expectedS, a_trim)) {
                 a_why = std::format("preview or truncated stream ({:.1f} s of {:.0f} s)", r.durationS, a_expectedS);
                 return false;
             }
@@ -724,7 +724,8 @@ namespace MJ::Pool {
                     std::scoped_lock lk(s.mx);
                     kept = KeepSetLocked().contains(file);
                 }
-                if (fs::exists(path, ec) && (kept || ValidateFile(path, static_cast<double>(t.durationS), why, a_st))) {
+                const bool trim = ns.statusKnown && ns.status.servicesReported;  // the profile carries trim_silence then
+                if (fs::exists(path, ec) && (kept || ValidateFile(path, static_cast<double>(t.durationS), why, a_st, trim))) {
                     fs::last_write_time(path, fs::file_time_type::clock::now(), ec);  // LRU touch
                     good = true;
                     spdlog::info("[pool] {}: cache hit {} for a pick", ep.id, file);
@@ -738,11 +739,12 @@ namespace MJ::Pool {
                                                 std::to_string(have) + "/" + std::to_string(ep.poolSize));
                     }
                     s.netSince    = SteadyMs();
-                    const auto dr = ns.client.DownloadAudio(t.audioUrl, path, static_cast<double>(t.durationS), a_st, urgent ? 0 : 60);
+                    // With trim the client's header-level guard is skipped (expected 0): ValidateFile applies the trim rule.
+                    const auto dr = ns.client.DownloadAudio(t.audioUrl, path, trim ? 0.0 : static_cast<double>(t.durationS), a_st,
+                                                            urgent ? 0 : 60);
                     s.netSince    = 0;
                     if (dr.error == Net::Error::kCancelled) {
-                        if (!a_st.stop_requested() || urgent) return true;
-                        spdlog::info("[pool] {}: download cancelled (settings, kill switch, or an empty pool needs the thread)", ep.id);
+                        spdlog::info("[pool] {}: download cancelled (settings, kill switch, an empty pool needs the thread, or shutdown)", ep.id);
                         return true;
                     }
                     if (dr.error == Net::Error::kTimeout || dr.error == Net::Error::kUnreachable) {
@@ -753,7 +755,7 @@ namespace MJ::Pool {
                         why = std::format("{} ({})", Net::ErrorName(dr.error), dr.message);
                         if (dr.error == Net::Error::kPreviewOrTruncated || dr.error == Net::Error::kBadAudio) rejectMs = kRejectLongMs;
                         if (dr.error == Net::Error::kDeadline && !urgent) rejectMs = 3 * 60'000;  // still transcoding: back soon
-                    } else if (ValidateFile(path, static_cast<double>(t.durationS), why, a_st)) {
+                    } else if (ValidateFile(path, static_cast<double>(t.durationS), why, a_st, trim)) {
                         good = true;
                         ToastSuccess(ns);
                     } else {

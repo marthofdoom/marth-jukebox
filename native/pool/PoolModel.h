@@ -120,6 +120,11 @@ namespace mj::pool
 	// `exclude` (the track the slot holds now). The caller keeps the ones whose cache file still exists.
 	[[nodiscard]] std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude);
 
+	// The preview / truncation guard (DESIGN 8.8). Tracks over 60 s must decode to at least 90% of the announced duration.
+	// With Harmony's trim_silence on (review R5-4) a long silent tail legitimately shortens a track, so then a track is
+	// rejected only if it is ALSO more than 30 s short (a 30 s Qobuz preview of a 224 s track is still caught).
+	[[nodiscard]] bool PreviewOrTruncated(double decodedS, double expectedS, bool trimSilence);
+
 	// ---- recent-played list (per environment, bounded) -------------------------------------------
 	[[nodiscard]] bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key);
 	void               AddRecent(PoolIndex& index, std::string_view envId, std::string_view key);

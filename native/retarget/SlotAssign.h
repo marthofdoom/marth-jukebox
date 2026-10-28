@@ -55,6 +55,14 @@ namespace mj::retarget
 	[[nodiscard]] bool SlotReady(std::string_view owner, std::string_view env, bool fresh, bool replay, bool failing,
 		long long servedAtMs, long long nowMs, long long graceMs = 10'000);
 
+	// Review R5-1: what the slot thread does when a slot needs content and its pool is dry.
+	//   another cached track of the environment exists -> place it (replay rotation);
+	//   none, but the slot file already holds a track of this environment -> keep repeating it (NOT failing: repeating
+	//   the only cached track beats a vanilla gap in a fight, and no restore/re-bind flap);
+	//   none at all -> fail (the environment goes vanilla until a download lands).
+	enum class DryPoolAction : std::uint8_t { PlaceReplay, RepeatCurrent, Fail };
+	[[nodiscard]] DryPoolAction ChooseDryPoolAction(bool otherCachedCandidate, bool slotHoldsEnvTrack);
+
 	[[nodiscard]] std::string SlotFileName(int slot);  // "slot_07.wav"
 	[[nodiscard]] std::string SlotEditorId(int slot);  // "MJ_SLOT_07"
 }

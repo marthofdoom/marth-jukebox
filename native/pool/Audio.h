@@ -40,6 +40,11 @@ namespace mj::pool
 	// The 44-byte canonical header for `dataBytes` of PCM in format `f`.
 	[[nodiscard]] std::array<std::uint8_t, 44> CanonicalWavHeader(const PcmFormat& f, std::uint32_t dataBytes);
 
+	// Review R5-3: true when `head` (the first 44+ bytes of a file of `fileSize` bytes) is the canonical header this plugin
+	// writes for that size: RIFF/WAVE, fmt PCM, data at offset 44 with dataBytes = fileSize - 44, and engine-playable.
+	// A slot file zeroed by a power loss (written without fsync) fails this.
+	[[nodiscard]] bool IsCanonicalSlotHeader(std::span<const std::uint8_t> head, std::uint64_t fileSize);
+
 	// What the slot path was proven with in the field: 16-bit PCM, stereo, 44100 Hz. Nothing else.
 	bool EnginePlayable(const PcmFormat& f, std::string& why);
 

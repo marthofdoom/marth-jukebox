@@ -46,6 +46,7 @@ namespace MJ::Pool::detail {
         bool          prepReplay = false;
         std::uint64_t prepBytes = 0;
         long long     prepMs = 0;
+        bool          repeatLogged = false;  // "the only cached track repeats" logged for this dry spell
         int           renameAttempts = 0;
         int           deniedAttempts = 0;
         // Flood guard (Deck field log): play events of this slot within the last few seconds; a slot the engine skips

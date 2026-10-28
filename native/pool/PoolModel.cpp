@@ -302,6 +302,14 @@ namespace mj::pool
 		return d;
 	}
 
+	bool PreviewOrTruncated(double decodedS, double expectedS, bool trimSilence)
+	{
+		if (!(expectedS > 60.0) || decodedS >= 0.9 * expectedS) {
+			return false;
+		}
+		return !trimSilence || expectedS - decodedS > 30.0;
+	}
+
 	bool IsHotEnvironment(std::string_view envId)
 	{
 		auto group = envId.substr(0, envId.find('.'));

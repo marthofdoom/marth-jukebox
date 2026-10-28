@@ -1095,9 +1095,9 @@ namespace MJ::Net {
 
             std::string target, err;
             if (!ResolveAudioUrl(a_audioUrl, target, err)) return fail(Error::kBadResponse, err);
-            if (target.find("wait=") == std::string::npos) {
-                target += (target.find('?') == std::string::npos ? "?wait=" : "&wait=") + std::to_string(cfg.waitS);
-            }
+            // `wait=` is set per request below: never longer than what is left of the deadline (review R5-5).
+            const bool ownWait = target.find("wait=") == std::string::npos;
+            const std::string baseTarget = target;
 
             PartGuard guard;
             guard.path = a_dest;
@@ -1112,6 +1112,11 @@ namespace MJ::Net {
 
             while (true) {
                 if (Cancelled(a_st)) return fail(Error::kCancelled, "cancelled");
+                if (ownWait) {
+                    const auto left = std::chrono::duration_cast<std::chrono::seconds>(deadline - std::chrono::steady_clock::now()).count();
+                    const int  w    = static_cast<int>((std::max<long long>)(0, (std::min<long long>)(cfg.waitS, left)));
+                    target          = baseTarget + (baseTarget.find('?') == std::string::npos ? "?wait=" : "&wait=") + std::to_string(w);
+                }
                 const auto t0 = std::chrono::steady_clock::now();
                 Exchange   ex;
                 Result     r = Open(L"GET", target, nullptr, L"*/*", recvMs, a_st, ex);

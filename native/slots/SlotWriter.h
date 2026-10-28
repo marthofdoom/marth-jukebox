@@ -75,8 +75,17 @@ namespace MJ::Slots {
 
     std::string Utf8(const std::filesystem::path& a_p);
 
-    // Field #4 (Deck stutter): a worker thread runs below normal priority and in background mode (low IO priority), so
-    // its downloads, decodes and slot writes never compete with the game's own streaming. Logged; failure is harmless.
+    // Field #4 (Deck stutter): a worker thread runs below normal priority. Logged; failure is harmless.
     void LowerCurrentThreadPriority(const char* a_name);
+
+    // Review R5-2: background (very low) IO priority ONLY around a lock-free, log-free section (the decode + write of a
+    // slot file): a thread in background mode must never hold s.mx or the log sink, or the game thread could wait on it.
+    struct BackgroundIo {
+        BackgroundIo();
+        ~BackgroundIo();
+        BackgroundIo(const BackgroundIo&)            = delete;
+        BackgroundIo& operator=(const BackgroundIo&) = delete;
+        bool on = false;
+    };
 
 }

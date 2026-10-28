@@ -133,6 +133,29 @@ namespace MJ::Pool::detail {
             return false;
         }
 
+        // Caller holds mx. Review R5-1: a dry pool with no other cached track. Repeat what the slot holds (if it is a
+        // track of this environment) instead of failing: no vanilla gap, no restore/re-bind flap. Logged once per dry spell.
+        void ApplyDryPoolAction(Shared& s, SlotState& sl, int a_slot, const std::string& a_env, mj::retarget::DryPoolAction a_action,
+                                long long a_now) {
+            (void)s;
+            sl.refreshPending = false;
+            if (a_action == mj::retarget::DryPoolAction::RepeatCurrent) {
+                if (!sl.repeatLogged)
+                    spdlog::warn("[slots] slot {:02} ({}): pool empty and no other cached track: {} repeats until a download lands",
+                                 a_slot, a_env, sl.contentKey);
+                sl.repeatLogged = true;
+                sl.replay       = true;
+                sl.fresh        = false;
+                sl.failing      = false;
+                return;
+            }
+            if (!sl.failing)
+                spdlog::warn("[slots] slot {:02} ({}): pool empty, nothing of this environment cached (environment degrades to Vanilla "
+                             "until a download lands)", a_slot, a_env);
+            sl.failing   = true;
+            sl.retryAtMs = a_now + 30'000;  // the cache will not change by itself: look again later
+        }
+
         // Caller holds mx. Picks at most one slot job to do now; also maintains `failing`.
         Job PickJobLocked(Shared& s, const Plan& plan, long long now) {
             Job job;
@@ -220,10 +243,7 @@ namespace MJ::Pool::detail {
                     job.replay = true;
                     return job;
                 }
-                if (!sl.failing) spdlog::warn("[slots] slot {:02} ({}): pool empty, no track to place (environment degrades to Vanilla)", i, env);
-                sl.failing        = true;
-                sl.fresh          = sl.owner == env && sl.fresh && contentInPool;
-                sl.refreshPending = false;  // nothing to place; a new track arrives through the normal "need" path
+                ApplyDryPoolAction(s, sl, i, env, mj::retarget::ChooseDryPoolAction(false, sl.owner == env && !sl.contentKey.empty()), now);
             }
             return job;
         }
@@ -261,6 +281,7 @@ namespace MJ::Pool::detail {
                 sl.renameAttempts = 0;
                 sl.deniedAttempts = 0;
                 sl.lastError.clear();
+                if (!j.replay) sl.repeatLogged = false;
                 int poolLeft = 0;
                 if (const auto p = s.index.pools.find(j.env); p != s.index.pools.end()) poolLeft = static_cast<int>(p->second.entries.size());
                 spdlog::info("[slots] slot {:02} ({}) <- {}{} ({:.1f} MB; decode+write {} ms, manifest+rename {} ms; pool {} ready)", j.slot,
@@ -315,11 +336,8 @@ namespace MJ::Pool::detail {
                 std::scoped_lock lk(s.mx);
                 auto&            sl = s.slots[j.slot];
                 if (src.empty()) {
-                    if (!sl.failing) spdlog::warn("[slots] slot {:02} ({}): pool empty and no recently played track is cached "
-                                                  "(environment degrades to Vanilla until a download lands)", j.slot, j.env);
-                    sl.failing        = true;
-                    sl.refreshPending = false;
-                    sl.retryAtMs      = SteadyMs() + 30'000;  // the cache will not change by itself: look again later
+                    ApplyDryPoolAction(s, sl, j.slot, j.env,
+                                       mj::retarget::ChooseDryPoolAction(false, sl.owner == j.env && !sl.contentKey.empty()), SteadyMs());
                     return;
                 }
                 s.inUse.insert(j.file);
