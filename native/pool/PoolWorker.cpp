@@ -23,6 +23,31 @@ namespace MJ::Pool {
             static Shared s;
             return s;
         }
+
+        HeldLock::HeldLock(Shared& a_s, const char* a_who) : s_(a_s) {
+            const bool game = std::this_thread::get_id() == s_.gameThread.load(std::memory_order_relaxed);
+            if (!game) {
+                s_.mx.lock();
+            } else {
+                const char* before = s_.holder.load(std::memory_order_relaxed);
+                const auto  t0     = std::chrono::steady_clock::now();
+                s_.mx.lock();
+                const long long us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+                if (us > 20'000) {
+                    s_.gameWaits.fetch_add(1, std::memory_order_relaxed);
+                    if (us > s_.gameWaitMaxUs.load(std::memory_order_relaxed)) {
+                        s_.gameWaitMaxUs.store(us, std::memory_order_relaxed);
+                        s_.gameWaitHolder.store(before ? before : "unknown", std::memory_order_relaxed);
+                    }
+                }
+            }
+            s_.holder.store(a_who, std::memory_order_relaxed);
+        }
+
+        HeldLock::~HeldLock() {
+            s_.holder.store(nullptr, std::memory_order_relaxed);
+            s_.mx.unlock();
+        }
         void MarkDirtyLocked() {
             S().indexDirty = true;
             S().poolWake   = true;
@@ -40,7 +65,7 @@ namespace MJ::Pool {
         void QueueToast(const std::optional<std::string>& a_t) {
             if (!a_t) return;
             auto&            s = S();
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             if (s.toasts.size() < 4) s.toasts.push_back(*a_t);
             spdlog::info("[toast] {}", *a_t);
         }
@@ -68,7 +93,7 @@ namespace MJ::Pool {
             for (const auto& [env, p] : idx.pools) entries += p.entries.size();
             spdlog::info("[pool] index loaded: {} pool(s), {} validated track(s), {} dropped at revalidation", idx.pools.size(), entries,
                          dropped);
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             s.index      = std::move(idx);
             s.indexDirty = dropped > 0;
             s.cacheReady = true;
@@ -79,7 +104,7 @@ namespace MJ::Pool {
             std::string text;
             fs::path    dir;
             {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 if (!s.indexDirty || !s.cacheReady) return;
                 s.indexDirty = false;
                 text         = mj::pool::SerializeIndex(s.index);
@@ -94,7 +119,7 @@ namespace MJ::Pool {
                 f.flush();
                 if (!f) {
                     spdlog::error("[pool] writing {} failed; the index will be retried", ToUtf8(tmp));
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     s.indexDirty = true;
                     return;
                 }
@@ -103,7 +128,7 @@ namespace MJ::Pool {
             fs::rename(tmp, dst, ec);  // MSVC: MoveFileExW(REPLACE_EXISTING)
             if (ec) {
                 spdlog::error("[pool] replacing {} failed: {}", ToUtf8(dst), ec.message());
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 s.indexDirty = true;
             }
         }
@@ -164,7 +189,7 @@ namespace MJ::Pool {
             }
             std::vector<std::string> victims;
             {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 victims = mj::pool::PlanEviction(files, KeepSetLocked(), a_cap);
             }
             std::uint64_t freed = 0;
@@ -174,7 +199,7 @@ namespace MJ::Pool {
                 const auto      sz = fs::file_size(p, e2);
                 // Re-check under the lock just before the delete: a file may have entered a pool meanwhile.
                 {
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     if (KeepSetLocked().contains(v)) continue;
                 }
                 if (fs::remove(p, e2)) {
@@ -211,6 +236,13 @@ namespace MJ::Pool {
             std::map<std::string, int>  prevSlots;
             std::uint64_t               planGen = 0;
             mj::pool::ToastPolicy       toast;
+            double                      avgDownloadS = 0.0;  // field #5: EMA of the time to get one track
+            struct ColdPick {
+                Net::Track  track;
+                std::string fingerprint;
+                long long   retryAtMs = 0;
+            };
+            std::map<std::string, std::deque<ColdPick>> coldPending;  // per environment
             std::set<std::string>       loggedProblems;  // profile problems already logged (logged again only after they cleared)
         };
 
@@ -225,7 +257,7 @@ namespace MJ::Pool {
 
         void SetConn(bool a_configured, bool a_ok, std::string a_msg, const NetState* a_ns = nullptr) {
             auto&            s = S();
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             s.conn.configured = a_configured;
             s.conn.ok         = a_ok;
             s.conn.tested     = true;
@@ -244,7 +276,7 @@ namespace MJ::Pool {
             auto& s = S();
             std::vector<mj::retarget::TypeFacts> cat;
             {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 if (!s.haveCatalogue) return;
                 cat = s.catalogue;
             }
@@ -296,7 +328,7 @@ namespace MJ::Pool {
 
             std::vector<std::string> dropped, consentLost;
             {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 // Pools are matched against the new fingerprints only once the server's capabilities are known
                 // (they decide `sources`), and only when the network is on (off = keep everything for later).
                 if (ns.statusKnown && netOn && s.cacheReady) {
@@ -393,7 +425,7 @@ namespace MJ::Pool {
             ns.toast.Configure({ ns.snap->global.toastEnabled, mj::config::NetworkActive(*ns.snap),
                                  static_cast<long long>(ns.snap->global.toastIntervalMinutes) * 60'000ll });
             {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 s.capBytes = static_cast<std::uint64_t>(ns.snap->global.cacheCapMB) * 1048576ull;
                 for (auto& [id, es] : s.envs) {
                     es.problem.clear();
@@ -421,7 +453,7 @@ namespace MJ::Pool {
                 {
                     // ONLY these two assignments under the lock: SetConn below takes s.mx itself (review R3-1: holding
                     // it here deadlocked the pool thread on any address Configure rejects, freezing the game thread).
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     s.netUrl = c.baseUrl;
                     s.netKey = c.personalKey;
                 }
@@ -567,7 +599,7 @@ namespace MJ::Pool {
 
         void EnvBackoff(const std::string& a_env, long long a_ms, std::string a_problem) {
             auto&            s = S();
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             auto&            es = s.envs[a_env];
             es.failures++;
             es.backoffUntilMs = SteadyMs() + a_ms;
@@ -585,7 +617,7 @@ namespace MJ::Pool {
             const auto snap  = s.store->Snapshot();
             bool       valid = true;
             {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 if (s.clearCacheRequested) return true;
                 if (snap->revision == ns.snap->revision) return false;
                 valid = mj::pool::DownloadStillValid(*snap, s.netUrl, s.netKey, a_ep.id, a_ep.fingerprint, s.conn.servicesReported);
@@ -601,7 +633,7 @@ namespace MJ::Pool {
 
         void Reject(const std::string& a_env, const std::string& a_key, long long a_ms) {
             auto&            s = S();
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             s.envs[a_env].rejected[a_key] = SteadyMs() + a_ms;
         }
 
@@ -611,9 +643,10 @@ namespace MJ::Pool {
             std::shared_ptr<const Plan> plan;
             const EnvPlan* pick = nullptr;
             int         have = 0;
+            int         pickTarget = 0;
             std::uint64_t pooledBytes = 0;
             {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 plan = s.plan;
                 if (!plan || !plan->engineWrites || !s.cacheReady) return false;
                 for (const auto& [id, p] : s.index.pools)
@@ -625,14 +658,22 @@ namespace MJ::Pool {
                     if (const auto e = s.envs.find(id); e != s.envs.end() && e->second.waitForPlay) continue;  // small selection
                     const auto pit = s.index.pools.find(id);
                     const int  n   = pit == s.index.pools.end() ? 0 : static_cast<int>(pit->second.entries.size());
-                    if (n >= ep.poolSize) continue;
-                    if (const auto e = s.envs.find(id); e != s.envs.end() && now < e->second.backoffUntilMs) continue;
-                    // Urgent pools first (empty, or combat/boss below 2), then combat/boss, then the largest gap.
-                    const int score = mj::pool::RefillScore(id, n, ep.poolSize);
+                    // Field #5: the target adapts to observed download time vs track length (at most 8).
+                    auto&     es     = s.envs[id];
+                    const int target = mj::pool::AdaptivePoolSize(ep.poolSize, ns.avgDownloadS, es.avgTrackS);
+                    if (target != es.target && target != ep.poolSize)
+                        spdlog::info("[pool] {}: keeping {} tracks ready (downloads ~{:.0f} s, tracks ~{:.0f} s)", id, target, ns.avgDownloadS,
+                                     es.avgTrackS);
+                    es.target = target;
+                    if (n >= target) continue;
+                    if (now < es.backoffUntilMs) continue;
+                    // Urgent pools first (at most one track left), then combat/boss, then the largest gap.
+                    const int score = mj::pool::RefillScore(id, n, target);
                     if (score > best) {
-                        best = score;
-                        pick = &ep;
-                        have = n;
+                        best       = score;
+                        pick       = &ep;
+                        have       = n;
+                        pickTarget = target;
                     }
                 }
                 if (pick && pooledBytes >= s.capBytes) {
@@ -645,27 +686,43 @@ namespace MJ::Pool {
             const EnvPlan ep     = *pick;  // copy: the plan pointer stays alive anyway
             const bool    urgent = mj::pool::UrgentRefill(ep.id, have);
             {
-                std::scoped_lock lk(s.mx);  // what SettingsChanged() and the slot thread check before cancelling this job
+                HeldLock lk(s, __func__);  // what SettingsChanged() and the slot thread check before cancelling this job
                 s.jobEnv    = ep.id;
                 s.jobFp     = ep.fingerprint;
                 s.jobUrgent = urgent;
             }
             struct JobClear {
                 ~JobClear() {
-                    std::scoped_lock lk(S().mx);
+                    HeldLock lk(S(), __func__);
                     S().jobEnv.clear();
                     S().jobFp.clear();
                     S().jobUrgent = false;
                 }
             } jobClear;
-            const int     need = ep.poolSize - have;
+            const int     need = pickTarget - have;
             const bool    flac = ns.snap->global.features.flac && ns.statusKnown &&
                               std::find(ns.status.containers.begin(), ns.status.containers.end(), "flac") != ns.status.containers.end();
             const int count = std::clamp(std::max(3, need), 1, 10);
             // The container is sent ONLY for FLAC: a Harmony before 1.0.13 rejects unknown keys in `next` (review B2), and
             // WAV is its default anyway.
-            const auto nr   = ns.client.Next(ns.snap->global.harmonyProfileName, ep.id, ep.sources, count, false, flac ? "flac" : "", a_st);
-            if (nr.Ok()) ToastSuccess(ns);
+            // Field #5: a pick whose cold transcode ran past the short deadline is retried DIRECTLY a little later (the
+            // server kept transcoding it, so it is fast now), instead of asking `next` for yet another cold pick.
+            Net::NextResult nr;
+            bool            fromPending = false;
+            {
+                auto& q = ns.coldPending[ep.id];
+                while (!q.empty() && q.front().fingerprint != ep.fingerprint) q.pop_front();
+                if (!q.empty() && q.front().retryAtMs <= SteadyMs()) {
+                    nr.tracks   = { q.front().track };
+                    fromPending = true;
+                    q.pop_front();
+                    spdlog::info("[pool] {}: retrying {} (its transcode should be ready now)", ep.id, nr.tracks[0].title);
+                }
+            }
+            if (!fromPending) {
+                nr = ns.client.Next(ns.snap->global.harmonyProfileName, ep.id, ep.sources, count, false, flac ? "flac" : "", a_st);
+                if (nr.Ok()) ToastSuccess(ns);
+            }
             if (!nr.Ok()) {
                 switch (nr.error) {
                 case Net::Error::kCancelled: return false;
@@ -695,7 +752,7 @@ namespace MJ::Pool {
                     {
                         long long ms = 15'000;
                         {
-                            std::scoped_lock lk(s.mx);
+                            HeldLock lk(s, __func__);
                             ms = std::min<long long>(15'000ll << std::min(s.envs[ep.id].failures, 6), 600'000);
                         }
                         EnvBackoff(ep.id, ms, "Harmony could not pick a track right now");
@@ -708,7 +765,7 @@ namespace MJ::Pool {
             for (const auto& t : nr.tracks) pairs.emplace_back(t.service, t.id);
             mj::pool::PickChoice choice;
             {
-                std::scoped_lock      lk(s.mx);
+                HeldLock lk(s, __func__);
                 auto&                 es  = s.envs[ep.id];
                 const long long       now = SteadyMs();
                 std::set<std::string> exclude;
@@ -730,7 +787,7 @@ namespace MJ::Pool {
             if (ok.empty()) {
                 // Everything the server offered is already pooled (or just failed): a selection no bigger than the pool.
                 // Do not poll `next` every 20 s: wait for the next play event (or a settings change) (review B r2).
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 std::set<std::string> pooled;
                 if (const auto pit = s.index.pools.find(ep.id); pit != s.index.pools.end())
                     for (const auto& e : pit->second.entries) pooled.insert(e.Key());
@@ -762,7 +819,7 @@ namespace MJ::Pool {
                 long long         rejectMs = kRejectShortMs;
                 bool              kept = false;  // pooled elsewhere / in a slot / being read: already validated, never replaced
                 {
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     kept = KeepSetLocked().contains(file);
                 }
                 const bool trim = ns.statusKnown && ns.status.servicesReported;  // the profile carries trim_silence then
@@ -775,7 +832,7 @@ namespace MJ::Pool {
                     // so the pick comes back fast after a short wait, and an empty pool is never stuck behind it
                     // (field #4: a dungeon pick held the only pool thread for 180 s while combat was dry).
                     {
-                        std::scoped_lock lk(s.mx);
+                        HeldLock lk(s, __func__);
                         s.netWhat = std::format("{} download ({}{})", ep.id, urgent ? "urgent" : "not urgent", ", pool " +
                                                 std::to_string(have) + "/" + std::to_string(ep.poolSize));
                     }
@@ -795,7 +852,14 @@ namespace MJ::Pool {
                     if (!dr.Ok()) {
                         why = std::format("{} ({})", Net::ErrorName(dr.error), dr.message);
                         if (dr.error == Net::Error::kPreviewOrTruncated || dr.error == Net::Error::kBadAudio) rejectMs = kRejectLongMs;
-                        if (dr.error == Net::Error::kDeadline && !urgent) rejectMs = 3 * 60'000;  // still transcoding: back soon
+                        if (dr.error == Net::Error::kDeadline && !urgent && !fromPending) {
+                            // Not rejected: kept and retried directly in 90 s (field #5: five boss picks each burned 60 s and
+                            // were never asked for again).
+                            auto& q = ns.coldPending[ep.id];
+                            if (q.size() < 3) q.push_back({ t, ep.fingerprint, SteadyMs() + 90'000 });
+                            spdlog::info("[pool] {}: {} is still transcoding after 60 s; retried directly in 90 s", ep.id, t.title);
+                            continue;
+                        }
                     } else if (ValidateFile(path, static_cast<double>(t.durationS), why, a_st, trim)) {
                         good = true;
                         ToastSuccess(ns);
@@ -803,7 +867,7 @@ namespace MJ::Pool {
                         rejectMs = kRejectLongMs;
                         bool held = false;
                         {
-                            std::scoped_lock lk(s.mx);
+                            HeldLock lk(s, __func__);
                             held = KeepSetLocked().contains(file);
                         }
                         // Never delete a file a pool, a slot or the slot thread holds (review B SEV-4). Only this thread
@@ -828,7 +892,7 @@ namespace MJ::Pool {
                 e.sources   = ep.sources;
                 if (ec || e.bytes == 0) continue;
                 {
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     // The plan may have changed during the download: only add while the fingerprint still matches.
                     const EnvPlan* now = nullptr;
                     if (s.plan) {
@@ -840,10 +904,11 @@ namespace MJ::Pool {
                     }
                     auto& pool       = s.index.pools[ep.id];
                     pool.fingerprint = ep.fingerprint;
-                    if (static_cast<int>(pool.entries.size()) >= now->poolSize) continue;
+                    if (static_cast<int>(pool.entries.size()) >= std::max(now->poolSize, pickTarget)) continue;
                     pool.entries.push_back(e);
                     auto& es    = s.envs[ep.id];
                     es.failures = 0;
+                    es.avgTrackS = es.avgTrackS <= 0.0 ? e.durationS : 0.7 * es.avgTrackS + 0.3 * e.durationS;
                     es.problem.clear();
                     MarkDirtyLocked();
                     s.slotCv.notify_all();
@@ -851,12 +916,16 @@ namespace MJ::Pool {
                 ++added;
                 spdlog::info("[pool] {}: + {} ({} s, {:.1f} MB {}, {} ms) pool {}/{}", ep.id, e.Display(), t.durationS, e.bytes / 1048576.0,
                              cont, std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count(),
-                             have + added, ep.poolSize);
+                             have + added, pickTarget);
+                if (!fromPending || added > 0) {
+                    const double dl = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                    ns.avgDownloadS = ns.avgDownloadS <= 0.0 ? dl : 0.7 * ns.avgDownloadS + 0.3 * dl;
+                }
             }
             if (added == 0 && !ok.empty()) {
                 bool repeated = false;
                 {
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     repeated = s.envs[ep.id].failures >= 2;  // this makes 3 rounds in a row
                 }
                 // Never a silent "Filling pool": say why after a few rounds of rejected picks.
@@ -882,7 +951,7 @@ namespace MJ::Pool {
             {
                 const auto snap = s.store->Snapshot();
                 ApplyLogLevel(*snap);
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 s.cacheDir = s.store->EffectiveCacheDir();
                 s.capBytes = static_cast<std::uint64_t>(snap->global.cacheCapMB) * 1048576ull;
             }
@@ -906,7 +975,7 @@ namespace MJ::Pool {
                 // A fresh per-job stop source (NET-CLIENT.md): SettingsChanged() / the kill switch cancel only this job.
                 std::stop_source job;
                 {
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     dirty                 = s.settingsDirty || s.store->Revision() != ns.seenRev;
                     s.settingsDirty       = false;
                     clear                 = s.clearCacheRequested;
@@ -973,7 +1042,7 @@ namespace MJ::Pool {
 
     void SetCatalogue(std::vector<mj::retarget::TypeFacts> a_types) {
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         s.catalogue     = std::move(a_types);
         s.haveCatalogue = true;
         s.poolCv.notify_all();
@@ -982,7 +1051,7 @@ namespace MJ::Pool {
     void SettingsChanged() {
         auto&      s    = S();
         const auto snap = s.store ? s.store->Snapshot() : nullptr;
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         s.settingsDirty = true;
         if (!snap) {  // before Start(): nothing runs yet (review R3-3)
             s.poolCv.notify_all();
@@ -1001,6 +1070,17 @@ namespace MJ::Pool {
         s.poolCv.notify_all();
     }
 
+    void MarkGameThread() { S().gameThread.store(std::this_thread::get_id()); }
+
+    LockWaitStats TakeLockWaitStats() {
+        auto&         s = S();
+        LockWaitStats r;
+        r.count = s.gameWaits.exchange(0);
+        r.maxUs = s.gameWaitMaxUs.exchange(0);
+        if (const char* h = s.gameWaitHolder.exchange(nullptr)) r.holder = h;
+        return r;
+    }
+
     std::string PerfNow() {
         auto&           s   = S();
         const long long now = SteadyMs();
@@ -1013,7 +1093,7 @@ namespace MJ::Pool {
             out = "slot thread idle";
         std::string what;
         {
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             what = s.netWhat;
         }
         if (const long long n = s.netSince.load(); n > 0) out += std::format("; pool thread in a {} for {} ms (network-paced writes)", what, now - n);
@@ -1023,7 +1103,7 @@ namespace MJ::Pool {
 
     std::optional<std::string> PopToast() {
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         if (s.toasts.empty()) return std::nullopt;
         auto t = std::move(s.toasts.front());
         s.toasts.pop_front();
@@ -1032,7 +1112,7 @@ namespace MJ::Pool {
 
     void ClearCache() {
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         s.clearCacheRequested = true;
         s.poolCv.notify_all();
     }
@@ -1041,14 +1121,14 @@ namespace MJ::Pool {
 
     std::shared_ptr<const Plan> CurrentPlan() {
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         return s.plan;
     }
 
     std::array<SlotView, kSlots> SlotViews() {
         auto&                        s = S();
         std::array<SlotView, kSlots> out;
-        std::scoped_lock             lk(s.mx);
+        HeldLock lk(s, __func__);
         for (int i = 0; i < kSlots; ++i) out[i] = s.slots[i];
         return out;
     }
@@ -1056,7 +1136,7 @@ namespace MJ::Pool {
     void PublishBound(int a_slot, const std::string& a_env) {
         if (a_slot < 0 || a_slot >= kSlots) return;
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         if (s.slots[a_slot].bound != a_env) {
             s.slots[a_slot].bound = a_env;
             s.slotCv.notify_all();
@@ -1074,7 +1154,7 @@ namespace MJ::Pool {
     void PostPlayEvent(int a_slot, const std::string& a_env, std::uint32_t a_handle, std::uint32_t a_idx) {
         if (a_slot < 0 || a_slot >= kSlots) return;
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         s.events.push_back({ a_slot, a_env, a_handle, a_idx, SteadyMs() });
         s.slotCv.notify_all();
     }
@@ -1084,7 +1164,7 @@ namespace MJ::Pool {
     std::vector<EnvReport> Report() {
         auto&                  s = S();
         std::vector<EnvReport> out;
-        std::scoped_lock       lk(s.mx);
+        HeldLock lk(s, __func__);
         std::set<std::string>  ids;
         if (s.plan)
             for (const auto& [id, ep] : s.plan->envs) ids.insert(id);
@@ -1097,6 +1177,7 @@ namespace MJ::Pool {
                     r.slot    = it->second.slot;
                     r.planned = it->second.slot >= 0;
                     r.target  = it->second.poolSize;
+                    if (const auto e = s.envs.find(id); e != s.envs.end() && e->second.target > 0) r.target = e->second.target;
                 }
             }
             if (const auto p = s.index.pools.find(id); p != s.index.pools.end()) {
@@ -1118,13 +1199,13 @@ namespace MJ::Pool {
 
     ConnReport Connection() {
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         return s.conn;
     }
 
     void SetPlayedCallback(PlayedFn a_fn) {
         auto&            s = S();
-        std::scoped_lock lk(s.mx);
+        HeldLock lk(s, __func__);
         s.played = std::move(a_fn);
     }
 

@@ -403,7 +403,7 @@ MJ_TEST(Pool_RefillPolicy)
 	MJ_CHECK(IsHotEnvironment("combat") && IsHotEnvironment("combat.civil_war") && IsHotEnvironment("boss"));
 	MJ_CHECK(!IsHotEnvironment("explore") && !IsHotEnvironment("dungeon.cave") && !IsHotEnvironment("combatx"));
 	MJ_CHECK(EffectivePoolSize("combat", 3) == 5 && EffectivePoolSize("combat", 8) == 8 && EffectivePoolSize("explore", 3) == 3);
-	MJ_CHECK(UrgentRefill("explore", 0) && !UrgentRefill("explore", 1));
+	MJ_CHECK(UrgentRefill("explore", 0) && UrgentRefill("explore", 1) && !UrgentRefill("explore", 2));  // field #5: <= 1
 	MJ_CHECK(UrgentRefill("combat", 1) && !UrgentRefill("combat", 2));
 	// An empty dungeon pool still beats a combat pool at 2 of 5; a combat pool at 1 beats a dungeon at 1 of 3.
 	MJ_CHECK(RefillScore("dungeon", 0, 3) > RefillScore("combat", 2, 5));
@@ -554,4 +554,16 @@ MJ_TEST(Pool_IndexKeepsReplayable)
 	// An index written before R7-2 has no "replayable": nothing is replayable until played again.
 	MJ_CHECK(ParseIndex(R"({"version":1,"pools":{},"recent":{"explore":["local:x"]}})", back, diag));
 	MJ_CHECK(back.replayable.empty() && back.recent["explore"].size() == 1);
+}
+
+// Field #5: pool depth from observed download time vs track length (Deck: 30-120 s downloads, 80-150 s explore tracks).
+MJ_TEST(Pool_AdaptivePoolSize)
+{
+	MJ_CHECK(AdaptivePoolSize(3, 0.0, 0.0) == 3);       // nothing observed yet
+	MJ_CHECK(AdaptivePoolSize(3, 45.0, 130.0) == 3);    // fast enough: the setting stands
+	MJ_CHECK(AdaptivePoolSize(3, 117.0, 80.0) == 4);    // slow downloads, short tracks: deeper
+	MJ_CHECK(AdaptivePoolSize(3, 300.0, 60.0) == 7);
+	MJ_CHECK(AdaptivePoolSize(3, 1000.0, 30.0) == 8);   // capped at 8
+	MJ_CHECK(AdaptivePoolSize(5, 30.0, 200.0) == 5);    // never below the setting / hot minimum
+	MJ_CHECK(AdaptivePoolSize(8, 1000.0, 30.0) == 8);
 }

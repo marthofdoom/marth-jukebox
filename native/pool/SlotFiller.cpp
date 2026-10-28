@@ -93,6 +93,18 @@ namespace MJ::Pool::detail {
                     }
                 }
                 mj::pool::RemoveEntry(s.index, e.env, key);
+                // Field #5: the play leaves this pool at <= 1 (urgent): a non-urgent download for another environment must
+                // not make it wait (before, preemption only happened once the slot was already dry).
+                {
+                    const auto p    = s.index.pools.find(e.env);
+                    const int  left = p == s.index.pools.end() ? 0 : static_cast<int>(p->second.entries.size());
+                    if (mj::pool::UrgentRefill(e.env, left) && !s.jobEnv.empty() && s.jobEnv != e.env && !s.jobUrgent) {
+                        spdlog::info("[slots] {}: {} track(s) left after this play; cancelling the non-urgent {} download so this pool "
+                                     "refills first", e.env, left, s.jobEnv);
+                        s.jobStop.request_stop();
+                        s.jobUrgent = true;
+                    }
+                }
                 mj::pool::AddRecent(s.index, e.env, key);
                 mj::pool::AddReplayable(s.index, e.env, key);
                 sl.fresh      = false;
@@ -271,7 +283,7 @@ namespace MJ::Pool::detail {
                 std::uint64_t bytes = 0;
                 bool          first = false;
                 {
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     bytes = s.slots[j.slot].prepBytes;
                     first = s.slots[j.slot].renameAttempts == 0;
                 }
@@ -282,7 +294,7 @@ namespace MJ::Pool::detail {
             }();
             bool discard = false;
             {
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             auto&            sl = s.slots[j.slot];
             ++sl.renameAttempts;
             if (r.ok) {
@@ -334,7 +346,7 @@ namespace MJ::Pool::detail {
                 // First candidate whose cache file still exists (outside the lock).
                 fs::path dir;
                 {
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     dir = s.cacheDir;
                 }
                 for (const auto& [key, files] : j.candidates) {
@@ -350,7 +362,7 @@ namespace MJ::Pool::detail {
                     }
                     if (!src.empty()) break;
                 }
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 auto&            sl = s.slots[j.slot];
                 if (src.empty()) {
                     ApplyDryPoolAction(
@@ -361,7 +373,7 @@ namespace MJ::Pool::detail {
                 }
                 s.inUse.insert(j.file);
             } else {
-                std::scoped_lock lk(s.mx);
+                HeldLock lk(s, __func__);
                 src = s.cacheDir / j.file;
             }
             s.slotJobSlot  = j.slot;
@@ -370,7 +382,7 @@ namespace MJ::Pool::detail {
             s.slotJobSince = 0;
             s.lastSlotJobEnd = SteadyMs();
             s.lastSlotJobMs  = r.ms;
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             s.inUse.erase(j.file);
             auto& sl = s.slots[j.slot];
             if (r.ok) {
@@ -412,7 +424,7 @@ namespace MJ::Pool::detail {
         const auto known = Slots::LoadManifest();
         Slots::CleanTempFiles();
         {
-            std::scoped_lock lk(s.mx);
+            HeldLock lk(s, __func__);
             for (const auto& [slot, rec] : known) {
                 auto& sl       = s.slots[slot];
                 sl.owner       = rec.env;
@@ -430,7 +442,7 @@ namespace MJ::Pool::detail {
                 if (k != s.killFile.load()) {
                     s.killFile = k;
                     spdlog::warn("[retarget] kill switch file {}", k ? "APPEARED: retarget stops, originals restored when safe" : "removed");
-                    std::scoped_lock lk(s.mx);
+                    HeldLock lk(s, __func__);
                     s.replanWanted = true;
                     s.jobStop.request_stop();
                     s.poolCv.notify_all();

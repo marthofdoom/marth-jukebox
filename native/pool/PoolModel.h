@@ -114,9 +114,15 @@ namespace mj::pool
 	inline constexpr int kHotPoolMin = 5;
 	[[nodiscard]] bool IsHotEnvironment(std::string_view envId);  // "combat", "boss" and their sub-environments
 	[[nodiscard]] int  EffectivePoolSize(std::string_view envId, int poolSize);
-	// Urgent = the pool is empty, or a hot environment has fewer than 2 ready. An urgent refill may cancel a running
-	// non-urgent download and gets the full download deadline; a non-urgent one gets a short one.
+	// Urgent = at most one track ready (field #5: that one is usually already in the slot, so the next play empties the
+	// pool). An urgent refill may cancel a running non-urgent download and gets the full download deadline; a non-urgent
+	// one gets a short one.
 	[[nodiscard]] bool UrgentRefill(std::string_view envId, int have);
+
+	// Field #5: how many tracks an environment keeps ready, from what was observed: one track lasts `avgTrackS`, getting
+	// one takes `avgDownloadS` (cold transcodes 30-120 s on the Deck), and other environments share the one download
+	// thread. target = max(base, ceil(avgDownloadS / avgTrackS) + 2), at most 8; `base` when nothing is known yet.
+	[[nodiscard]] int AdaptivePoolSize(int base, double avgDownloadS, double avgTrackS);
 	// Which environment the pool thread refills next: larger first. Urgent before anything; then hot; then the gap.
 	[[nodiscard]] int RefillScore(std::string_view envId, int have, int target);
 	// Review R6-1: whether a track of `service` may play under the environment's CURRENT `sources` (consent):

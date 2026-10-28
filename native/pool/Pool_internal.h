@@ -19,6 +19,8 @@ namespace MJ::Pool::detail {
 
     struct EnvState {
         std::string problem;            // plain language for the menu ("" = none); cleared when a track arrives
+        double      avgTrackS = 0.0;    // field #5: average length of this environment's tracks (EMA)
+        int         target = 0;         // field #5: adaptive pool target (0 = the plan's size)
         std::string streamingNotice;    // set by every Replan from the plan (streaming not possible on this server)
         bool        smallSelection = false;  // the last refill could only offer recently played tracks
         bool        waitForPlay = false;     // nothing new to ask for until the next play event / settings change
@@ -101,6 +103,12 @@ namespace MJ::Pool::detail {
         std::atomic<long long>      lastSlotJobEnd{ 0 };
         std::atomic<long long>      lastSlotJobMs{ 0 };
         std::atomic<long long>      netSince{ 0 };
+        // PerfProbe: lock holder and the game thread's waits for s.mx
+        std::atomic<const char*>     holder{ nullptr };
+        std::atomic<std::thread::id> gameThread{};
+        std::atomic<long long>       gameWaits{ 0 };
+        std::atomic<long long>       gameWaitMaxUs{ 0 };
+        std::atomic<const char*>     gameWaitHolder{ nullptr };
         std::deque<std::string>     toasts;             // in-game notifications for the game thread
         std::map<std::string, std::string> playedTitles; // "service:id" -> "Artist - Title" of served tracks (replay lines)
         bool                        clearCacheRequested = false;
@@ -115,6 +123,20 @@ namespace MJ::Pool::detail {
     };
 
     Shared& S();
+
+    // Field #5 PerfProbe: every worker/entry-point lock of s.mx goes through this. It records who holds the lock and,
+    // when the GAME thread had to wait more than 20 ms for it, how long and behind whom (logged once a minute by the
+    // game thread, never under the lock), so a log separates "our lock" from a game stall.
+    class HeldLock {
+    public:
+        HeldLock(Shared& a_s, const char* a_who);
+        ~HeldLock();
+        HeldLock(const HeldLock&)            = delete;
+        HeldLock& operator=(const HeldLock&) = delete;
+
+    private:
+        Shared& s_;
+    };
 
     void PoolThread(std::stop_token a_st);
     void SlotThread(std::stop_token a_st);

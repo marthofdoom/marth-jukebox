@@ -77,6 +77,14 @@ namespace MJ::Pool {
     // What the workers are doing right now (slot write, download) and the last slot job's timing: appended to the
     // stall detector's warning so a log separates a game stall (autosave, loading) from our IO (field #4).
     std::string PerfNow();
+    // Field #5 PerfProbe (game thread): call once from the game thread; then its waits for the pool lock are measured.
+    void MarkGameThread();
+    struct LockWaitStats {
+        long long   count = 0;   // game-thread waits > 20 ms since the last call
+        long long   maxUs = 0;
+        std::string holder;      // who held the lock during the longest wait
+    };
+    LockWaitStats TakeLockWaitStats();
     long long SteadyMs();
 
     // ---- status for the menu (any thread) ----

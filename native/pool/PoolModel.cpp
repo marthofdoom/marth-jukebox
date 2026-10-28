@@ -2,6 +2,7 @@
 #include "pool/PoolModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <system_error>
 #include <unordered_set>
@@ -333,9 +334,18 @@ namespace mj::pool
 		return IsHotEnvironment(envId) ? std::max(poolSize, kHotPoolMin) : poolSize;
 	}
 
-	bool UrgentRefill(std::string_view envId, int have)
+	bool UrgentRefill(std::string_view, int have)
 	{
-		return have <= 0 || (IsHotEnvironment(envId) && have < 2);
+		return have <= 1;
+	}
+
+	int AdaptivePoolSize(int base, double avgDownloadS, double avgTrackS)
+	{
+		if (!(avgDownloadS > 0.0) || !(avgTrackS > 1.0)) {
+			return base;
+		}
+		const int want = static_cast<int>(std::ceil(avgDownloadS / avgTrackS)) + 2;
+		return std::clamp(std::max(base, want), base, std::max(base, 8));
 	}
 
 	int RefillScore(std::string_view envId, int have, int target)
