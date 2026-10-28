@@ -116,3 +116,10 @@ Reviewer A's in-game checklist (round 2, 9 items) is docs/INTEGRATION-TEST.md "R
 - **SEV-5** `s.queryText.erase` inside the suggestions loop is fragile (it relies on the loop ending right after the pick).
 - **SEV-5** The empty-text browse `SearchAsync` ("Show suggestions" with no text, genre list for presets) is a contract with
   the core: it must return the library's genres/artists for an empty query.
+
+## core-fix-deck final pass (0300100) — Opus, verbatim, deferred
+
+- SEV-4 R7-1: consent can leak while Harmony has never been reached this session. The pool drop only happens once the server's capabilities are known, so unticking streaming in a session where Harmony was never reachable does not drop the old pool; PickJob still writes its pool heads (YouTube Music tracks) into the slot because heads are not filtered by sources. Fix: filter the pool head with ServiceAllowedBySources too, or drop the pool on a consent change regardless of server state. (Make this the first item of the next fix round: it is a consent matter.)
+- SEV-4 R7-2: erasing the recent list also erases repeat avoidance. Switching A -> B -> A, or between overlapping selections, can pick a track that was just played, even the one playing now (weakens DESIGN 8.7). Fix: keep the list for repeat avoidance and track which keys may be replayed separately (e.g. only keys added after the last drop).
+- SEV-5 R7-3: in a session that starts offline `sources` falls back to `library`, which also filters out YouTube Music replays the player did consent to (environment goes vanilla sooner). The slot's contentFile is not cleared on a drop, so one old cache file stays protected from eviction until the slot is overwritten.
+- SEV-5 (R5 closing): `Slots_DryPoolNoFlap` re-implements the state transitions instead of driving PickJobLocked; with trim on, a real truncation of 30 s or less is accepted (the client byte-count check normally catches a cut transfer).
