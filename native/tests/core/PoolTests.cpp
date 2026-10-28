@@ -413,9 +413,9 @@ MJ_TEST(Pool_RefillPolicy)
 	MJ_CHECK(RefillScore("explore", 3, 3) < RefillScore("explore", 2, 3));
 
 	PoolIndex idx;
-	AddRecent(idx, "combat", "local:a");
-	AddRecent(idx, "combat", "local:b");
-	AddRecent(idx, "combat", "local:c");
+	AddReplayable(idx, "combat", "local:a");
+	AddReplayable(idx, "combat", "local:b");
+	AddReplayable(idx, "combat", "local:c");
 	const auto order = ReplayOrder(idx, "combat", "local:c");
 	MJ_CHECK(order.size() == 2 && order[0] == "local:a" && order[1] == "local:b");
 	MJ_CHECK(ReplayOrder(idx, "explore", "").empty());
@@ -445,9 +445,10 @@ MJ_TEST(Pool_ReplayRespectsConsentAndSelection)
 	// Unchanged selection: the replay behaviour stays.
 	PoolIndex idx;
 	idx.pools["combat"].fingerprint = "fp-stream";
-	AddRecent(idx, "combat", "ytmusic:old1");
-	AddRecent(idx, "combat", "local:lib1");
-	AddRecent(idx, "combat", "ytmusic:now");
+	for (const char* k : { "ytmusic:old1", "local:lib1", "ytmusic:now" }) {
+		AddRecent(idx, "combat", k);
+		AddReplayable(idx, "combat", k);
+	}
 	MJ_CHECK(ReplayOrder(idx, "combat", "ytmusic:now", "library,ytmusic").size() == 2);
 	MJ_CHECK(RepeatAllowed(idx, "combat", "combat", "ytmusic:now", "library,ytmusic"));
 
@@ -458,7 +459,8 @@ MJ_TEST(Pool_ReplayRespectsConsentAndSelection)
 	MJ_CHECK(!RepeatAllowed(idx, "combat", "combat", "ytmusic:now", "library"));
 	// After the drop the recent list is gone too: nothing of the old selection is left -> Fail (vanilla).
 	const auto dropped = DropChangedSelections(idx, { { "combat", "fp-library" } });
-	MJ_CHECK(dropped.size() == 1 && !idx.recent.contains("combat"));
+	MJ_CHECK(dropped.size() == 1 && !idx.replayable.contains("combat"));
+	MJ_CHECK(IsRecent(idx, "combat", "ytmusic:now"));  // repeat avoidance survives the change (R7-2)
 	MJ_CHECK(ReplayOrder(idx, "combat", "", "library").empty());
 	MJ_CHECK(!RepeatAllowed(idx, "combat", "combat", "local:lib1", "library"));
 
@@ -466,13 +468,90 @@ MJ_TEST(Pool_ReplayRespectsConsentAndSelection)
 	PoolIndex sel;
 	sel.pools["explore"].fingerprint = "ambient";
 	AddRecent(sel, "explore", "local:a");
+	AddReplayable(sel, "explore", "local:a");
 	(void)DropChangedSelections(sel, { { "explore", "folk" } });
 	MJ_CHECK(ReplayOrder(sel, "explore", "", "library").empty() && !RepeatAllowed(sel, "explore", "explore", "local:a", "library"));
 	// Unchanged environments keep their recent lists.
 	PoolIndex keep;
 	keep.pools["explore"].fingerprint = "ambient";
 	AddRecent(keep, "explore", "local:a");
+	AddReplayable(keep, "explore", "local:a");
 	MJ_CHECK(DropChangedSelections(keep, { { "explore", "ambient" } }).empty() && IsRecent(keep, "explore", "local:a"));
+	MJ_CHECK(RepeatAllowed(keep, "explore", "explore", "local:a", "library"));
 	// A slot owned by another environment, or with unknown content, never repeats.
 	MJ_CHECK(!RepeatAllowed(keep, "explore", "combat", "local:a", "library") && !RepeatAllowed(keep, "explore", "explore", "", "library"));
+}
+
+// Review R7-1: a session that never reached Harmony, streaming unticked: the consent (from the settings alone) removes
+// every YouTube Music track from the pool and the replayable list, so no YouTube head is placed and the slot goes vanilla.
+MJ_TEST(Pool_OfflineConsentChange)
+{
+	mj::config::Settings st;
+	mj::config::EnvironmentSetting e;
+	e.mode           = mj::config::Mode::Genre;
+	e.selector       = "epic";
+	e.allowStreaming = true;
+	MJ_CHECK(ConsentSources(st, e) == "library,ytmusic");
+	st.global.allowQobuz = true;
+	MJ_CHECK(ConsentSources(st, e) == "library,ytmusic,qobuz");
+	st.global.allowQobuz = false;
+	e.allowStreaming     = false;  // the player unticks streaming (no server contact needed to know this)
+	const auto consent = ConsentSources(st, e);
+	MJ_CHECK(consent == "library");
+
+	PoolIndex idx;
+	idx.pools["combat"].entries = { Entry("ytmusic", "y1", 1), Entry("local", "l1", 1), Entry("ytmusic", "y2", 1) };
+	AddReplayable(idx, "combat", "ytmusic:y0");
+	MJ_CHECK(FirstAllowedHead(idx, "combat", consent)->id == "l1");  // defence in depth: never a YouTube head
+	const auto changed = ApplyConsent(idx, { { "combat", consent } });
+	MJ_CHECK(changed.size() == 1 && idx.pools["combat"].entries.size() == 1 && idx.pools["combat"].entries[0].service == "local");
+	MJ_CHECK(ReplayOrder(idx, "combat", "", consent).empty());
+
+	// Only YouTube tracks pooled: nothing may be placed, and the YouTube track in the slot may not repeat -> vanilla.
+	PoolIndex yt;
+	yt.pools["combat"].entries = { Entry("ytmusic", "y1", 1) };
+	AddReplayable(yt, "combat", "ytmusic:y0");
+	MJ_CHECK(FirstAllowedHead(yt, "combat", consent) == nullptr);
+	(void)ApplyConsent(yt, { { "combat", consent } });
+	MJ_CHECK(yt.pools["combat"].entries.empty() && ReplayOrder(yt, "combat", "", consent).empty());
+	MJ_CHECK(!RepeatAllowed(yt, "combat", "combat", "ytmusic:y0", consent));
+	// Consent unchanged: nothing is removed.
+	PoolIndex ok;
+	ok.pools["combat"].entries = { Entry("ytmusic", "y1", 1) };
+	MJ_CHECK(ApplyConsent(ok, { { "combat", "library,ytmusic" } }).empty() && ok.pools["combat"].entries.size() == 1);
+}
+
+// Review R7-2: A -> B -> A keeps repeat avoidance (the just-played track is not re-picked), while only tracks played
+// since the last change are replayable.
+MJ_TEST(Pool_SelectionRoundTripKeepsRepeatAvoidance)
+{
+	PoolIndex idx;
+	idx.pools["explore"].fingerprint = "A";
+	AddRecent(idx, "explore", "local:a1");  // played under A, and playing now
+	AddReplayable(idx, "explore", "local:a1");
+	(void)DropChangedSelections(idx, { { "explore", "B" } });  // A -> B
+	MJ_CHECK(ReplayOrder(idx, "explore", "", "library").empty());
+	idx.pools["explore"].fingerprint = "B";
+	AddRecent(idx, "explore", "local:b1");  // played under B
+	AddReplayable(idx, "explore", "local:b1");
+	(void)DropChangedSelections(idx, { { "explore", "A" } });  // B -> A
+	// Back on A the server offers a1 again: it was played moments ago, so it is not accepted while fresh picks exist.
+	const auto c = AcceptablePicks(idx, "explore", { { "local", "a1" }, { "local", "a2" } }, 1);
+	MJ_CHECK(c.picks.size() == 1 && c.picks[0] == 1 && !c.repeats);
+	// Nothing of A or B is replayable after the change.
+	MJ_CHECK(ReplayOrder(idx, "explore", "", "library").empty());
+	MJ_CHECK(!RepeatAllowed(idx, "explore", "explore", "local:b1", "library"));
+}
+
+MJ_TEST(Pool_IndexKeepsReplayable)
+{
+	PoolIndex idx;
+	AddReplayable(idx, "explore", "local:x");
+	AddRecent(idx, "explore", "local:x");
+	PoolIndex back;
+	std::vector<std::string> diag;
+	MJ_CHECK(ParseIndex(SerializeIndex(idx), back, diag) && back.replayable["explore"].size() == 1);
+	// An index written before R7-2 has no "replayable": nothing is replayable until played again.
+	MJ_CHECK(ParseIndex(R"({"version":1,"pools":{},"recent":{"explore":["local:x"]}})", back, diag));
+	MJ_CHECK(back.replayable.empty() && back.recent["explore"].size() == 1);
 }

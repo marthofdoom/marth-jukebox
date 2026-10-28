@@ -27,6 +27,7 @@ namespace MJ::Pool {
         int         slot = -1;      // -1: more active environments than slots (stays vanilla)
         int         poolSize = 3;
         std::string sources;        // `sources` for `next` (config::ChooseSources)
+        std::string consent;        // services the player consented to (mj::pool::ConsentSources; known offline)
         std::string fingerprint;    // mj::pool::Fingerprint
         bool        streamingDropped = false;
     };

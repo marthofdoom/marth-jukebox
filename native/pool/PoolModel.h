@@ -57,6 +57,9 @@ namespace mj::pool
 	{
 		std::map<std::string, EnvPool, std::less<>>                 pools;   // environment id -> pool
 		std::map<std::string, std::deque<std::string>, std::less<>> recent;  // environment id -> keys, oldest first
+		// Review R7-2: keys that may be REPLAYED while the pool is dry: tracks played since the environment's last
+		// selection/consent change (the recent list above survives such a change, for repeat avoidance; this does not).
+		std::map<std::string, std::deque<std::string>, std::less<>> replayable;
 	};
 
 	// ---- names and fingerprints ----------------------------------------------------------------
@@ -126,20 +129,35 @@ namespace mj::pool
 	[[nodiscard]] std::vector<std::string> ReplayOrder(const PoolIndex& index, std::string_view envId, std::string_view exclude,
 		std::string_view sources = "all");
 
-	// Review R6-1: may the track a slot holds be repeated for `envId`? Only if the slot holds a track of this environment
-	// that belongs to its CURRENT selection (still pooled, or in the recent list, which a selection change clears) and
-	// whose service the current `sources` allow.
+	// Review R6-1/R7-2: may the track a slot holds be repeated for `envId`? Only if the slot holds a track of this
+	// environment that belongs to its CURRENT selection (still pooled, or replayable, which a selection change clears) and
+	// whose service the current consent allows.
 	[[nodiscard]] bool RepeatAllowed(const PoolIndex& index, std::string_view envId, std::string_view owner, std::string_view contentKey,
 		std::string_view sources);
 
-	// DropChangedPools + the dropped environments' recent-played lists: their tracks belong to a selection (or a streaming
-	// consent) the player changed, so they must never be replayed. Returns the dropped environment ids.
+	// DropChangedPools + the dropped environments' REPLAYABLE lists: their tracks belong to a selection (or a streaming
+	// consent) the player changed, so they must never be replayed. The recent-played list is kept (review R7-2): switching
+	// A -> B -> A must not re-pick a track that was just played. Returns the dropped environment ids.
 	std::vector<std::string> DropChangedSelections(PoolIndex& index, const std::map<std::string, std::string>& wanted);
 
 	// The preview / truncation guard (DESIGN 8.8). Tracks over 60 s must decode to at least 90% of the announced duration.
 	// With Harmony's trim_silence on (review R5-4) a long silent tail legitimately shortens a track, so then a track is
 	// rejected only if it is ALSO more than 30 s short (a 30 s Qobuz preview of a 224 s track is still caught).
 	[[nodiscard]] bool PreviewOrTruncated(double decodedS, double expectedS, bool trimSilence);
+
+	// Review R7-1/R7-3: the services the player CONSENTED to for an environment, from the settings alone (so it is known
+	// offline, before the server's capabilities): streaming off -> "library"; on -> "library,ytmusic" (+",qobuz" with
+	// AllowQobuz). This is what may PLAY from the cache; `sources` for `next` may be narrower (an old server).
+	[[nodiscard]] std::string ConsentSources(const config::Settings& s, const config::EnvironmentSetting& e);
+
+	// Review R7-1: removes, per environment in `consentByEnv`, every pool entry and replayable key whose service the
+	// consent does not allow (works offline). Returns the environments that lost something.
+	std::vector<std::string> ApplyConsent(PoolIndex& index, const std::map<std::string, std::string>& consentByEnv);
+
+	// The first pool entry the consent allows (defence in depth for the slot thread), or null.
+	[[nodiscard]] const PoolEntry* FirstAllowedHead(const PoolIndex& index, std::string_view envId, std::string_view consent);
+
+	void AddReplayable(PoolIndex& index, std::string_view envId, std::string_view key);
 
 	// ---- recent-played list (per environment, bounded) -------------------------------------------
 	[[nodiscard]] bool IsRecent(const PoolIndex& index, std::string_view envId, std::string_view key);
