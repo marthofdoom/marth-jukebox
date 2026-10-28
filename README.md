@@ -158,7 +158,12 @@ checkbox then also lets Harmony use Qobuz.
 Global settings (page section **Pool and cache** and **Advanced**):
 
 - **Tracks kept ready per environment** (pool size): 3, 5 or 8. Default 3.
-- **Cache size limit**: default 4096 MB (4 GB), minimum 256 MB (`CacheCapMB` in the INI).
+- **Cache size limit**: default 4096 MB (4 GB), minimum 256 MB (`CacheCapMB` in the INI). The limit applies to the
+  downloaded tracks; the slot files (below) come on top.
+- **Cache on disk** (the number shown in the page): everything this mod keeps on disk for music, i.e. the downloaded
+  tracks in the cache folder PLUS the slot files under `Music/Harmony`. It is re-measured after every download and every
+  few seconds. "2 of 3 ready" counts the tracks waiting in that environment's pool, including the one already placed in
+  its slot file for the next play; a track still downloading is not counted.
 - **Clear cache**: deletes downloaded tracks that are not in use (they are fetched again when needed). Asks you to click twice.
 - **Log level** and the kill switches (see below).
 
@@ -189,6 +194,11 @@ The slot files are what Skyrim actually plays, so their disk use is real: roughl
 active environment (44.1 kHz 16-bit stereo), on top of the cache.
 
 The plugin never overwrites a slot file that it did not create itself.
+
+The game only plays slot files that already existed when it started. So the first time the plugin loads it creates all
+24 slot files as one second of silence (about 4 MB together); they are replaced by real tracks while you play. If a slot
+file cannot be played (the game skips it again and again), that environment goes back to vanilla music, the page says
+why, and the log has the details; restart the game or change that environment's settings to try again.
 
 ## Performance and threading
 

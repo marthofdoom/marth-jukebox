@@ -56,7 +56,21 @@ namespace MJ::App {
             return o;
         }
 
+        bool ConfigureClientNow(Net::HarmonyClient& a_cl, const mj::config::Settings& a_s, std::string& a_err);
+
+        // UI thread only (one client). Re-configures only when the URL or key changed (each Configure logs a line).
         bool ConfigureClient(Net::HarmonyClient& a_cl, const mj::config::Settings& a_s, std::string& a_err) {
+            static std::string lastUrl, lastKey;
+            static bool        lastOk = false;
+            if (lastOk && a_s.global.serverUrl == lastUrl && a_s.global.personalKey == lastKey) return true;
+            const bool ok = ConfigureClientNow(a_cl, a_s, a_err);
+            lastOk        = ok;
+            lastUrl       = a_s.global.serverUrl;
+            lastKey       = a_s.global.personalKey;
+            return ok;
+        }
+
+        bool ConfigureClientNow(Net::HarmonyClient& a_cl, const mj::config::Settings& a_s, std::string& a_err) {
             Net::Config c;
             c.baseUrl     = a_s.global.serverUrl;
             c.personalKey = a_s.global.personalKey;
@@ -328,6 +342,7 @@ namespace MJ::App {
 
     void Init() {
         if (g_store) return;
+        Slots::EnsurePlaceholders();  // before the engine starts: every slot file must exist at game start (Deck field log)
         g_store = std::make_unique<mj::config::SettingsStore>(Slots::PluginDir() / L"MarthJukebox.ini",
                                                               Slots::PluginDir() / L"MarthJukebox" / L"cache");
     }
@@ -345,7 +360,10 @@ namespace MJ::App {
             }
             Wake();
         });
-        Pool::Start(g_store.get());
+        {
+            const auto v = SKSE::PluginDeclaration::GetSingleton()->GetVersion();
+            Pool::Start(g_store.get(), std::format("MarthJukebox/{}.{}.{}", v.major(), v.minor(), v.patch()));
+        }
         if (!g_ui.th.joinable()) g_ui.th = std::jthread(UiThread);
     }
 
@@ -420,7 +438,20 @@ namespace MJ::App {
         const auto plan    = Pool::CurrentPlan();
         const auto views   = Pool::SlotViews();
         const auto conn    = Pool::Connection();
-        const auto build   = mj::config::BuildProfile(*snap);
+        // Quiet (logProblems=false) and cached per settings revision: the menu refreshes this 4 times a second, and the
+        // pool thread already logs each distinct profile problem once (Deck field log: 110 repeated warnings).
+        mj::config::ProfileBuild build;
+        {
+            static std::mutex                   mx;
+            static std::uint64_t                rev = ~0ull;
+            static mj::config::ProfileBuild     cached;
+            std::scoped_lock                    lk(mx);
+            if (rev != snap->revision) {
+                cached = mj::config::BuildProfile(*snap, false);
+                rev    = snap->revision;
+            }
+            build = cached;
+        }
         std::map<std::string, Pool::EnvReport> byId;
         for (const auto& r : reports) byId[r.id] = r;
         std::set<std::string> ids;

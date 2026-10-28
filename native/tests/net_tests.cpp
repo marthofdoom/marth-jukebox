@@ -28,6 +28,9 @@
 #include <vector>
 
 #include "net/HarmonyClient.h"
+#include "pool/Pool.h"
+
+#include <future>
 
 namespace MJ::Net {
     long LiveRequestContextsForTests();  // test hook in HarmonyClient.cpp (not in the public header)
@@ -656,6 +659,104 @@ namespace {
         CHECK(MsSince(t0) >= 900);  // honoured Retry-After: 1
         CHECK(fs::exists(dir / "b.wav") && CountFiles(dir) == 1);
         CHECK(r.audio.channels == 2 && r.audio.durationS > 69.9 && r.audio.durationS < 70.1);
+    }
+
+    // Deck field log (core-fix-deck): a cold transcode makes the server HOLD the request for its whole `wait=`
+    // before answering 202. Reproduces it with a server that sends nothing for `holdS` seconds per request (or until
+    // its `wait=` value, whichever is shorter), then 202 + Retry-After: 1, until `readyAfterS` have passed since the
+    // first request; then 200 + audio. Production timeouts (Config defaults) apart from waitS.
+    void RunColdTranscode(int a_waitS, int a_holdS, int a_readyAfterS, const char* a_tag) {
+        const fs::path    dir = TestDir();
+        const std::string wav = MakeWav(8000, 2, 16, 70.0);
+        const auto        t0  = std::chrono::steady_clock::now();
+        Server s(
+            [&](const Req& q, Conn& c, int) {
+                int        wait = a_holdS;
+                const auto w    = q.target.find("wait=");
+                if (w != std::string::npos) wait = (std::min)(wait, std::atoi(q.target.c_str() + w + 5));
+                const long long left = a_readyAfterS * 1000ll - MsSince(t0);
+                if (left <= 0) {
+                    c.Send(AudioHead(wav.size()) + wav);
+                    return;
+                }
+                c.Wait(static_cast<int>((std::min)(left, wait * 1000ll)));
+                if (a_readyAfterS * 1000ll - MsSince(t0) <= 0) c.Send(AudioHead(wav.size()) + wav);
+                else c.Send(Resp(202, "Accepted", R"({"status":"transcoding","retry_after_s":1})", "Retry-After: 1\r\n"));
+            },
+            true);
+        HarmonyClient cl;
+        Config        cfg;  // production timeouts
+        cfg.baseUrl = s.Url();
+        cfg.waitS   = a_waitS;
+        Configured(cl, cfg);
+        const DownloadResult r = cl.DownloadAudio(kAudioUrl, dir / "cold.wav", 70.0);
+        if (r.error != Error::kOk) Fail(__LINE__, a_tag, std::string(ErrorName(r.error)) + " " + r.message + " after " + std::to_string(MsSince(t0)) + " ms");
+        CHECK(fs::exists(dir / "cold.wav"));
+        std::printf("    %s: %zu request(s), %lld ms\n", a_tag, s.Seen().size(), MsSince(t0));
+    }
+
+    // The Deck case: one request held 25 s (> the 21 s seen in the field) under the PRODUCTION client settings.
+    void T_DownloadColdTranscodeLongHold() { RunColdTranscode(Config{}.waitS, 25, 27, "hold 25 s, production waitS"); }
+    // Scaled: the client must keep looping on 202 within its deadline (each hold = waitS = 1 s, ready after 4 s).
+    void T_DownloadColdTranscodeLoops() { RunColdTranscode(1, 30, 4, "scaled 202 loop"); }
+
+    // Review R3-1: the pool thread deadlocked (s.mx held across SetConn) on any server address the client rejects, and
+    // the game thread then blocked forever in CurrentPlan()/SlotViews(). Drives the real pool workers through an invalid
+    // address, a key-only change, an empty address and a closed port, and requires every game-thread call to return.
+    void T_PoolSettingsNeverDeadlock() {
+        const fs::path dir = TestDir();
+        {
+            std::ofstream ini(dir / "MJ.ini", std::ios::binary);
+            ini << "[General]\nServerUrl=http://[::1]:8080\nPersonalKey=k\n[Env:explore]\nMode=Genre\nSelector=ambient\n";
+        }
+        // Leaked on purpose: the pool threads are process-lifetime statics and must never outlive the store.
+        auto* store = new mj::config::SettingsStore(dir / "MJ.ini", dir / "cache");
+        MJ::Pool::Start(store, "MarthJukebox/test");
+        MJ::Pool::SetCatalogue({ { "MUSExploreTundra", "Skyrim.esm", false, 10 } });
+        auto alive = [](const char* a_what) {
+            auto f = std::async(std::launch::async, [] {
+                for (int i = 0; i < 20; ++i) {
+                    (void)MJ::Pool::CurrentPlan();
+                    (void)MJ::Pool::SlotViews();
+                    (void)MJ::Pool::Report();
+                    (void)MJ::Pool::Connection();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            });
+            if (f.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+                Fail(__LINE__, a_what, "DEADLOCK: the game-thread calls did not return within 10 s");
+                std::printf("mj_net_tests: aborting after a deadlock\n");
+                std::fflush(stdout);
+                std::quick_exit(3);
+            }
+        };
+        auto waitFor = [](auto a_pred, int a_ms) {
+            for (int t = 0; t < a_ms && !a_pred(); t += 50) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            return a_pred();
+        };
+        // 1. An address the client rejects (an IPv6 literal passes Settings but not HarmonyClient::Configure).
+        CHECK(waitFor([] { return MJ::Pool::Connection().message.find("not valid") != std::string::npos; }, 8000));
+        alive("invalid address");
+        // 2. Key-only change.
+        store->Update([](mj::config::Settings& a_s) { a_s.global.personalKey = "k2"; });
+        MJ::Pool::SettingsChanged();
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        alive("key-only change");
+        // 3. Empty address.
+        store->Update([](mj::config::Settings& a_s) { a_s.global.serverUrl.clear(); });
+        MJ::Pool::SettingsChanged();
+        CHECK(waitFor([] { return MJ::Pool::Connection().message.find("Not set up") != std::string::npos; }, 8000));
+        alive("empty address");
+        // 4. A valid address with nothing listening (connect refused, back-off).
+        store->Update([](mj::config::Settings& a_s) { a_s.global.serverUrl = "http://127.0.0.1:1"; });
+        MJ::Pool::SettingsChanged();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        alive("closed port");
+        // 5. Back to an invalid address once more (the reconfigure branch again).
+        store->Update([](mj::config::Settings& a_s) { a_s.global.serverUrl = "http://[::1]:9"; });
+        MJ::Pool::SettingsChanged();
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        alive("invalid address again");
     }
 
     void T_Download202Deadline() {
@@ -1341,6 +1442,8 @@ int main() {
         { "search", T_Search },
         { "status_services", T_StatusServices },
         { "browse", T_Browse },
+        { "download_cold_transcode_loops", T_DownloadColdTranscodeLoops },
+        { "download_cold_transcode_long_hold", T_DownloadColdTranscodeLongHold },
         { "classify_failure", T_ClassifyFailure },
         { "next_old_server_rejects_unknown_keys", T_NextOldServerRejectsUnknownKeys },
         { "download_wav_ok", T_DownloadWavOk },
@@ -1369,6 +1472,8 @@ int main() {
         { "cancel_racing_start", T_CancelRacingStart },
         { "cancel_stress_two_clients", T_CancelStressTwoClients },
         { "cancel_clear_interleave", T_CancelClearInterleave },
+        // LAST: it starts the process-lifetime pool threads (they end in an invalid-address state that sends nothing).
+        { "pool_settings_never_deadlock", T_PoolSettingsNeverDeadlock },
     };
     for (const auto& t : tests) {
         g_curName   = t.name;

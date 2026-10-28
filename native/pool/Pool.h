@@ -51,7 +51,8 @@ namespace MJ::Pool {
 
     // ---- lifecycle (called by app/App.cpp) ----
     // Starts both threads. The pool thread loads the store first (file IO stays off the game thread).
-    void Start(mj::config::SettingsStore* a_store);
+    // a_userAgent: "MarthJukebox/<version>" (the caller knows the plugin version; the pool code stays engine-free).
+    void Start(mj::config::SettingsStore* a_store, std::string a_userAgent);
     // The music-type catalogue (game thread, at the first watcher tick): facts only, index = catalogue index.
     void SetCatalogue(std::vector<mj::retarget::TypeFacts> a_types);
     // Re-read the settings snapshot, re-PUT the profile, re-plan (any thread; never blocks).

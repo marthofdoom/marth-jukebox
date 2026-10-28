@@ -76,6 +76,16 @@ use them raw.
 The base URL may be `http://`; then the key travels in clear text. Fine on a LAN or inside a Tailnet
 (already encrypted); anywhere else use `https://`.
 
+### Response-header timeout
+
+Every request also sets `WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT` to its receive timeout.
+WinHttpSetTimeouts does not cover the wait for the response headers, and Wine's WinHTTP defaults that wait to 21 s
+(`ACTUAL_DEFAULT_RECEIVE_RESPONSE_TIMEOUT` in dlls/winhttp/request.c; Windows: 90 s). A cold transcode holds the
+request for the whole `wait=` (30 s), so before this every such download failed under Proton after exactly 21 s with
+socket error 10060 (Steam Deck field log 2026-10-27; reproduced by `download_cold_transcode_long_hold` under Wine 10).
+Wine's 10060 is mapped to `kTimeout`. **That test only proves the fix under Wine/Proton**: on Windows (CI) it passes with
+or without the option, so the release checklist runs the CI-built `mj_net_tests.exe` under Wine/Proton (docs/RELEASING.md).
+
 ### Download protocol
 
 1. Resolve `audio_url`: root-relative or relative URLs are appended to the base prefix; an absolute URL
@@ -144,7 +154,8 @@ logged URL is replaced with `***`.
 test exe does not link CommonLibSSE). A scripted 127.0.0.1 HTTP/1.1 server (Winsock, test-only) answers
 each test; WAV/FLAC fixtures are synthesised in memory. Never contacts a real Harmony.
 
-status_json, status_no_containers_field, status_services, browse, next_json, next_404_no_tracks, http_error_mapping (401, 403,
+status_json, status_no_containers_field, status_services, browse, download_cold_transcode_loops,
+download_cold_transcode_long_hold (the server holds 25 s: needs the response-header timeout under Wine), next_json, next_404_no_tracks, http_error_mapping (401, 403,
 404 x4, 400, 413, 502, 503 x4 incl. Retry-After, 504, 500), unreachable, receive_timeout, put_profile,
 search, download_wav_ok, download_replace_and_preserve, download_202_then_200, download_202_deadline,
 download_truncated_body, download_preview_30s_vs_224s, download_flac_streaminfo, download_bad_audio,

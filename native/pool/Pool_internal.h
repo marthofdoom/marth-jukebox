@@ -48,6 +48,12 @@ namespace MJ::Pool::detail {
         std::uint64_t prepBytes = 0;
         int           renameAttempts = 0;
         int           deniedAttempts = 0;
+        // Flood guard (Deck field log): play events of this slot within the last few seconds; a slot the engine skips
+        // instantly produces one per tick. When it trips, the slot is disabled until the settings change or a restart.
+        std::deque<long long> recentEvents;
+        bool          disabled = false;
+        std::uint64_t disabledAtRevision = 0;
+        std::uint64_t ignoredEvents = 0;
     };
 
     struct PlayEvent {
@@ -63,6 +69,7 @@ namespace MJ::Pool::detail {
         std::condition_variable_any slotCv;   // wakes the slot thread
 
         mj::config::SettingsStore*  store = nullptr;
+        std::string                 userAgent = "MarthJukebox";
         std::filesystem::path       cacheDir;           // set by the pool thread once settings are loaded
         std::uint64_t               capBytes = 0;
         bool                        cacheReady = false; // index loaded + revalidated
@@ -83,6 +90,8 @@ namespace MJ::Pool::detail {
         bool                        poolWake = false;   // MarkDirtyLocked / new pool work: wake the pool thread once
         bool                        replanWanted = false;  // the kill-switch file changed (slot thread poll)
         std::stop_source            jobStop;            // the pool thread's current network job (A-F3)
+        std::string                 netUrl, netKey;     // what the pool client is configured with (Deck fix)
+        std::string                 jobEnv, jobFp;      // environment + fingerprint the current refill job works for
         std::deque<std::string>     toasts;             // in-game notifications for the game thread
         std::map<std::string, std::string> playedTitles; // "service:id" -> "Artist - Title" of served tracks (replay lines)
         bool                        clearCacheRequested = false;

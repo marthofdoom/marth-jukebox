@@ -39,7 +39,9 @@ the zips exist. GitHub wraps an uploaded artifact in one more zip when you downl
 6. Changes are merged to `main`; the CI run on that exact commit (`headSha` equals the commit) is **green**, including the
    "Package release zips" step. Ignore `cancelled/pending/queued`; wait.
 7. Download the artifact from that run, unwrap, and check: the file list above, the DLL's sha256, and that the PDB is only
-   in the symbols zip. Install the main zip into a clean MO2 profile and run the in-game test (docs/INTEGRATION-TEST.md).
+   in the symbols zip. Run that run's `mj_net_tests.exe` under Wine/Proton (`wine mj_net_tests.exe`, needs the MSVC
+   runtime in the prefix) and require `0 failed`: some network behaviour (e.g. `download_cold_transcode_long_hold`, the
+   21 s response-header timeout of Wine's WinHTTP) is only tested for real there; Windows CI cannot show it. Install the main zip into a clean MO2 profile and run the in-game test (docs/INTEGRATION-TEST.md).
 8. Tag `v<version>` on that commit and create the GitHub release (published, not draft). Attach both zips and the DLL
    sha256 in the notes; the notes name the verified runtime (1.6.1170 on Proton) and the known limits.
 9. The Nexus kit (`assets/nexus-description.bbcode`, banner) stays current, but Nexus upload is on hold and is a manual

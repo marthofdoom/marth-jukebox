@@ -575,7 +575,9 @@ namespace MJ::Net {
                 a_msg = "cancelled";
                 return Error::kCancelled;
             }
-            if (a_err == ERROR_WINHTTP_TIMEOUT) {
+            // Wine's WinHTTP reports its socket timeouts as the raw Winsock error WSAETIMEDOUT (10060) instead of
+            // ERROR_WINHTTP_TIMEOUT: a timeout either way, not an unreachable server.
+            if (a_err == ERROR_WINHTTP_TIMEOUT || a_err == 10060 /* WSAETIMEDOUT */) {
                 a_msg = "timed out";
                 return Error::kTimeout;
             }
@@ -641,6 +643,17 @@ namespace MJ::Net {
             }
             if (!::WinHttpSetTimeouts(a_ex.req, cfg.connectTimeoutMs, cfg.connectTimeoutMs, cfg.sendTimeoutMs, a_recvTimeoutMs)) {
                 return local(Error::kBadConfig, "WinHTTP refused the timeouts; request not sent");
+            }
+            // The wait for the response HEADERS has its own timeout, which WinHttpSetTimeouts does not set. Wine's WinHTTP
+            // (dlls/winhttp/request.c, ACTUAL_DEFAULT_RECEIVE_RESPONSE_TIMEOUT) defaults it to 21000 ms, so every
+            // request the server holds longer (a cold transcode holds the whole `wait=`, 30 s) failed after exactly 21 s
+            // with socket error 10060 (Steam Deck field log 2026-10-27). Windows defaults it to 90 s. Set it to the
+            // receive timeout of this request on both.
+            {
+                DWORD rrt = static_cast<DWORD>(a_recvTimeoutMs);
+                if (!::WinHttpSetOption(a_ex.req, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &rrt, sizeof rrt)) {
+                    return local(Error::kBadConfig, "WinHTTP refused RECEIVE_RESPONSE_TIMEOUT; request not sent");
+                }
             }
 
             // Header block and body live in the context: an async send may still read them after
