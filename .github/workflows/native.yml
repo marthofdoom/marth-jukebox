@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "native/**"
+      - "VERSION"
+      - "tools/package_release.py"
       - ".github/workflows/native.yml"
   workflow_dispatch:
 
@@ -65,6 +67,24 @@ jobs:
             native/build/release/MarthJukebox.dll
             native/build/release/MarthJukebox.pdb
             native/build/release/mj_net_tests.exe
+          if-no-files-found: error
+
+      # Release zips (docs/RELEASING.md): MarthJukebox-<version>.zip (DLL + ESP + docs, no PDB) and
+      # MarthJukebox-<version>-symbols.zip (PDB). Version = the VERSION file. Fails the job if anything is missing.
+      - name: Package release zips
+        id: pkg
+        shell: pwsh
+        run: |
+          $v = (Get-Content ..\VERSION -TotalCount 1).Trim()
+          "version=$v" >> $env:GITHUB_OUTPUT
+          python -I ..\tools\package_release.py --dll build\release\MarthJukebox.dll --pdb build\release\MarthJukebox.pdb --out-dir ..\dist
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload release zips
+        uses: actions/upload-artifact@v4
+        with:
+          name: MarthJukebox-${{ steps.pkg.outputs.version }}-zips
+          path: dist/*.zip
           if-no-files-found: error
 
       # Pure-C++ core tests (native/core.cmake): reconfigure the same tree with the option, build only the
