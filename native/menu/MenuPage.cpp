@@ -68,13 +68,6 @@ namespace MJ::Menu
 			std::map<std::string, std::vector<std::string>> peekCache;
 
 			ConfirmGate clearCacheGate;
-			ConfirmGate vanillaGate;
-
-			// library genre list (a browse search), used to tell which preset genres are missing
-			std::vector<App::SearchHit> genreList;
-			bool          genreWanted   = false;  // a genre browse was requested and its result is awaited
-			bool          genreAsked    = false;  // asked once automatically after the first successful connection
-			std::uint64_t genreSeq      = 0;
 
 			// filtered suggestions, rebuilt only when the inputs change (not every frame)
 			std::string                 hitsKey;
@@ -177,19 +170,6 @@ namespace MJ::Menu
 			App::SearchAsync(std::string(kind), a_text, a_streaming);
 		}
 
-		// Library genres for the preset check. Shares the core's single search slot, so it is only asked for when the user
-		// presses the button or once after a successful connection test.
-		void RequestGenreList()
-		{
-			auto& s = S();
-			s.genreWanted = true;
-			s.genreAsked = true;
-			s.genreSeq = s.search.seq;
-			s.searchEnv.clear();
-			s.searchDebounce.Cancel();
-			App::SearchAsync("genre", "", false);
-		}
-
 		void RefreshCaches(std::uint64_t a_now, bool a_force)
 		{
 			auto& s = S();
@@ -200,15 +180,6 @@ namespace MJ::Menu
 			s.conn = App::GetConnection();
 			s.status = App::GetEnvStatus();
 			s.search = App::GetSearch();
-			if (s.genreWanted && !s.search.busy && s.search.seq != s.genreSeq) {
-				s.genreWanted = false;
-				s.genreList.clear();
-				for (const auto& h : s.search.hits) {
-					if (h.kind == "genre") {
-						s.genreList.push_back(h);
-					}
-				}
-			}
 			s.cacheBytes = App::CacheBytes();
 			for (auto& [id, wanted] : s.peekWanted) {
 				if (wanted) {
@@ -280,39 +251,19 @@ namespace MJ::Menu
 		void DrawPresets()
 		{
 			auto& s = S();
-			UI::SeparatorText("Presets");
-			Wrapped("A preset only sets the music source of some environments. You can change anything afterwards.");
-			if (s.conn.state == App::ConnState::Ok && !s.genreAsked) {
-				RequestGenreList();
-			}
+			UI::SeparatorText("Preset");
+			Wrapped("The preset sets the music of some environments and turns streaming (YouTube Music) ON for them. "
+					"Everything else is left as it is, and you can change anything afterwards.");
 			for (const auto& p : Presets()) {
-				const bool isVanilla = std::string_view(p.id) == "vanilla";
-				const bool armed = isVanilla && s.vanillaGate.Armed(NowMs());
-				const std::string label = armed ? std::string("Click again to put every environment back to vanilla") : std::string(p.label);
-				bool apply = false;
-				if (UI::Button((label + "##preset_" + p.id).c_str())) {
-					apply = isVanilla ? s.vanillaGate.Press(NowMs()) : true;
-				}
-				Tooltip(p.description);
-				if (apply) {
+				if (UI::Button((std::string(p.label) + "##preset_" + p.id).c_str())) {
 					const std::string id = p.id;
 					Change([&](Settings& st) { ApplyPreset(st, id); });
 					s.searchEnv.clear();
 					s.queryText.clear();
 					s.note = std::string("Applied preset: ") + p.label;
 				}
-				if (const auto missing = MissingPresetGenres(p, s.genreList); !missing.empty()) {
-					std::string m = "Not in your library: ";
-					for (std::size_t k = 0; k < missing.size(); ++k) {
-						m += (k ? ", " : "") + missing[k];
-					}
-					Colored(kWarn, m + ". Those environments will have no tracks until you pick another genre.");
-				}
+				Tooltip(p.description);
 			}
-			if (UI::Button("Check preset genres against the server")) {
-				RequestGenreList();
-			}
-			Tooltip("Asks the server for its genre list so the presets can tell you which genres your library lacks.");
 			if (!s.note.empty()) {
 				Colored(kGood, s.note);
 			}

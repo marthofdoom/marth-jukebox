@@ -182,13 +182,18 @@ namespace MJ::Menu
 	// "Title - subtitle [service]" for the result list.
 	[[nodiscard]] std::string HitLabel(const App::SearchHit& a_hit);
 
-	// ---- presets (they only set Settings fields; flags and pool size are left as the user has them) --------
+	// ---- the one preset ---------------------------------------------------------------------------------
+	// "Author's Recommendation (YouTube Music)" = marth's own setup. Clicking it is the user's explicit consent to stream:
+	// every environment it lists gets AllowStreaming=1. It replaces the listed environments' settings (mode, selector,
+	// service, id), leaves every other environment (and unlisted sub-environments) untouched, and never touches the server
+	// settings. Pool size follows CurrentPoolSize, remember-place stays off.
 	struct PresetEntry
 	{
 		const char* envId;
 		Mode        mode;
-		const char* selector;
-		bool        streaming = false;  // the preset turns AllowStreaming on for exactly this environment (the user's explicit consent)
+		const char* selector;  // UTF-8
+		const char* service;   // "ytmusic" for Artist/Playlist, "" for Query
+		const char* id;        // YouTube Music channel / playlist id, "" for Query
 	};
 	struct Preset
 	{
@@ -199,14 +204,8 @@ namespace MJ::Menu
 	};
 	[[nodiscard]] const std::vector<Preset>& Presets();
 	[[nodiscard]] const Preset* FindPreset(std::string_view a_id);
-	// Applies every entry (and drops sub-environment overrides of the groups it names, which would otherwise win).
-	// "vanilla" preset: every entry in the settings goes back to Vanilla. False when the id is unknown.
+	// False when the id is unknown (no change).
 	bool ApplyPreset(Settings& a_settings, std::string_view a_presetId);
-	// Genre selectors of the preset that are NOT in `a_genres` (a genre-browse result from the server). Empty list given
-	// = nothing known = nothing reported.
-	[[nodiscard]] bool PresetUsesStreaming(const Preset& a_preset);
-	// Only library presets are checked: a streaming preset (YouTube Music) cannot be validated against the library's genres.
-	[[nodiscard]] std::vector<std::string> MissingPresetGenres(const Preset& a_preset, const std::vector<App::SearchHit>& a_genres);
 
 	// ---- first run --------------------------------------------------------------------------------------
 	struct FirstRun

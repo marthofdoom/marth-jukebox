@@ -97,7 +97,7 @@ like any other environment. An existing settings file from 1.0.0 is not changed 
    YouTube Music.", or "Connected. This Harmony is older than 1.0.13: library only, update it for streaming.", or what is
    wrong (not reachable, key rejected ...). The key is never printed in that message
    or in the log.
-6. Choose music. Either press a **preset** (under "Presets"), or set each environment yourself:
+6. Choose music. Either press the **preset** (under "Preset"), or set each environment yourself:
    - Pick a **Music source** for it: Vanilla, Genre, Artist, Playlist or Query.
    - Type the genre, artist, playlist or search text in the box. For artists and playlists, press **Show suggestions** and
      click one of the matches (this is also the way to choose without a keyboard). Genres are matched by name against the
@@ -106,12 +106,13 @@ like any other environment. An existing settings file from 1.0.0 is not changed 
 7. Play. The first tracks take a short while to download in the background; until a track is ready that environment
    keeps its vanilla music. Each environment row shows a status line such as "2 of 3 ready" and what is playing.
 
-Presets only fill in the music source of some environments and you can change everything afterwards:
-"Calm exploration + epic combat (YouTube Music)", "Dark dungeons (YouTube Music)", "Folk journey (library only)" and
-"Back to vanilla". The first two turn **streaming on** for the environments they fill (applying one is your consent). They
-assume your Harmony server has YouTube Music set up. The page warns when a preset's genre does not exist in your library.
+There is one preset, **Author's Recommendation (YouTube Music)**: the author's own setup. Pressing it fills 16
+environments (bosses, combat, dungeons, the exploration regions and towns) with specific artists, one playlist and one
+search text, and turns **streaming on** for exactly those environments. Pressing it is your consent to stream from
+YouTube Music, so it needs a Harmony server with YouTube Music set up. Other environments are left alone, and so are
+sub-environments it does not list; you can change anything afterwards, and "Reset to vanilla" on a row undoes that row.
 
-On a **gamepad**, text boxes need a keyboard. Everything else (source, suggestions, checkboxes, presets) works with a
+On a **gamepad**, text boxes need a keyboard. Everything else (source, suggestions, checkboxes, the preset) works with a
 controller.
 
 ## Environments
