@@ -108,9 +108,9 @@ like any other environment. An existing settings file from 1.0.0 is not changed 
 
 There is one preset, **Author's Recommendation (YouTube Music)**: the author's own setup. Pressing it fills 16
 environments (bosses, combat, dungeons, the exploration regions and towns) with specific artists, one playlist and one
-search text, and turns **streaming on** for exactly those environments. Pressing it is your consent to stream from
-YouTube Music, so it needs a Harmony server with YouTube Music set up. Other environments are left alone, and so are
-sub-environments it does not list; you can change anything afterwards, and "Reset to vanilla" on a row undoes that row.
+search text, and turns **streaming on** for those environments (places in the same groups that have no setting of their own follow them, so they also stream). Pressing it is your consent to stream from
+YouTube Music, so it needs a Harmony server with YouTube Music set up. Other groups are left alone, and so are
+sub-environments that already have their own setting and are not listed; you can change anything afterwards, and "Reset to vanilla" on a row undoes that row.
 
 On a **gamepad**, text boxes need a keyboard. Everything else (source, suggestions, checkboxes, the preset) works with a
 controller.
