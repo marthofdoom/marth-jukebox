@@ -1,8 +1,10 @@
 #include "TestHarness.h"
 
 #include "menu/StubApp.h"
+#include "config/ProfileBuilder.h"
 #include "menu/ViewModel.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -339,65 +341,135 @@ MJ_TEST(Hits_ApplyStoresSelector)
 
 // ---- presets -----------------------------------------------------------------------------------------------
 
-MJ_TEST(Presets_AllEntriesAreValidGenreEnvironments)
+namespace
 {
-	MJ_CHECK(FindPreset("calm_epic") != nullptr);
-	MJ_CHECK(FindPreset("nope") == nullptr);
-	for (const auto& p : Presets()) {
-		MJ_CHECK(p.label && *p.label);
-		for (const auto& e : p.entries) {
-			MJ_CHECK(mj::categories::IsKnownEnvironmentId(e.envId));
-			MJ_CHECK(e.mode == Mode::Genre || e.mode == Mode::Query);
-			MJ_CHECK(ValidateSelectorText(e.selector).ok);
-			MJ_CHECK(!e.streaming || PresetUsesStreaming(p));
+	const std::vector<std::string>& AuthorIds()
+	{
+		static const std::vector<std::string> ids = {
+			"boss", "combat", "combat.civil_war", "dungeon", "dungeon.fort", "dungeon.ice", "explore", "explore.coast",
+			"explore.forest_fall", "explore.forest_pine", "explore.marsh", "explore.mountain", "explore.reach", "explore.snow",
+			"town", "town.castle" };
+		return ids;
+	}
+}
+
+MJ_TEST(Preset_OnlyTheAuthorPresetExists)
+{
+	MJ_CHECK(Presets().size() == 1);
+	MJ_CHECK(FindPreset("author") != nullptr);
+	MJ_CHECK(std::string(FindPreset("author")->label) == "Author's Recommendation (YouTube Music)");
+	MJ_CHECK(std::string(FindPreset("author")->description).find("YouTube Music") != std::string::npos);
+	for (const char* gone : { "calm_epic", "dark_depths", "folk_journey", "vanilla", "nope" }) MJ_CHECK(FindPreset(gone) == nullptr);
+	auto s = mj::config::DefaultSettings();
+	MJ_CHECK(!ApplyPreset(s, "vanilla"));
+	MJ_CHECK(s.environments.empty());
+}
+
+MJ_TEST(Preset_EntriesAreTheSixteenKnownEnvironments)
+{
+	const auto& p = *FindPreset("author");
+	MJ_CHECK(p.entries.size() == 16);
+	std::vector<std::string> got;
+	for (const auto& e : p.entries) {
+		got.push_back(e.envId);
+		MJ_CHECK_MSG(mj::categories::IsKnownEnvironmentId(e.envId), e.envId);
+		MJ_CHECK(ValidateSelectorText(e.selector).ok);
+		if (e.mode == Mode::Query) {
+			MJ_CHECK(std::string(e.service).empty() && std::string(e.id).empty());
+		} else {
+			MJ_CHECK(e.mode == Mode::Artist || e.mode == Mode::Playlist);
+			MJ_CHECK(std::string(e.service) == "ytmusic" && !std::string(e.id).empty());
 		}
 	}
+	std::sort(got.begin(), got.end());
+	auto want = AuthorIds();
+	std::sort(want.begin(), want.end());
+	MJ_CHECK(got == want);
 }
 
-MJ_TEST(Presets_ApplySetsFieldsOnlyAndDropsSubOverrides)
+MJ_TEST(Preset_AppliesExactlySixteenWithStreamingAndTouchesNothingElse)
 {
 	auto s = mj::config::DefaultSettings();
-	SetMode(s, "explore.snow", Mode::Artist);  // an override that would beat the group
-	SetMode(s, "town", Mode::Genre);           // unrelated: must stay
-	s.environments["town"].selector = "Jazz";
-	SetStreaming(s, "explore", true);
-	SetPoolSizeAll(s, 5);
 	s.global.serverUrl = "http://h:1";
 	s.global.personalKey = "k";
+	SetMode(s, "town", Mode::Genre);                 // listed: replaced
+	s.environments["town"].selector = "Jazz";
+	SetMode(s, "tavern_x", Mode::Genre);             // not a real id, but any unlisted entry must survive
+	SetMode(s, "explore.tundra", Mode::Query);       // unlisted sub of a listed group: must survive
+	s.environments["explore.tundra"].selector = "rain";
+	SetMode(s, "special", Mode::Genre);              // unlisted group
+	s.environments["special"].selector = "Choral";
+	const auto before = s.environments;
 
-	MJ_CHECK(ApplyPreset(s, "calm_epic"));
-	MJ_CHECK(s.Find("explore")->mode == Mode::Genre && s.Find("explore")->selector == "ambient");
-	MJ_CHECK(s.Find("combat")->mode == Mode::Query && s.Find("combat")->selector == "epic battle music orchestral");
-	MJ_CHECK(s.Find("boss")->selector == "epic battle music orchestral");
-	MJ_CHECK(s.Find("explore")->allowStreaming && s.Find("combat")->allowStreaming && s.Find("boss")->allowStreaming);
-	MJ_CHECK(s.Find("town")->allowStreaming == false);  // streaming only where the preset fills
-	MJ_CHECK(s.Find("explore.snow") == nullptr);
-	MJ_CHECK(s.Find("combat")->poolSize == 5);             // new entries follow the pool size
-	MJ_CHECK(s.Find("town")->selector == "Jazz");          // not in the preset
-	MJ_CHECK(s.global.serverUrl == "http://h:1" && s.global.personalKey == "k");  // only environments change
-	MJ_CHECK(!ApplyPreset(s, "unknown"));
-}
-
-MJ_TEST(Presets_VanillaResetsEverything)
-{
-	auto s = mj::config::DefaultSettings();
-	ApplyPreset(s, "calm_epic");
-	SetMode(s, "explore.snow", Mode::Artist);
-	MJ_CHECK(ApplyPreset(s, "vanilla"));
-	for (const auto& [id, e] : s.environments) {
-		MJ_CHECK_MSG(e.mode == Mode::Vanilla, id);
+	MJ_CHECK(ApplyPreset(s, "author"));
+	for (const auto& id : AuthorIds()) {
+		const auto* e = s.Find(id);
+		MJ_CHECK_MSG(e != nullptr, id);
+		if (!e) continue;
+		MJ_CHECK_MSG(e->allowStreaming, id);
+		MJ_CHECK_MSG(e->mode != Mode::Vanilla, id);
+		MJ_CHECK_MSG(!e->rememberPlace && e->poolSize == 3, id);
 	}
+	MJ_CHECK(s.Find("boss")->mode == Mode::Query && s.Find("boss")->selector == "epic battle music orchestral");
+	MJ_CHECK(s.Find("combat")->mode == Mode::Artist && s.Find("combat")->service == "ytmusic" &&
+			 s.Find("combat")->id == "UCek0QuSdJ9sW6-L3K0VmnPw" && s.Find("combat")->selector == "Michael Ghelfi");
+	MJ_CHECK(s.Find("explore.reach")->mode == Mode::Playlist && s.Find("explore.reach")->id == "PL030536720850468C");
+	MJ_CHECK(s.Find("town")->selector == "Per-Olov Kindgren");  // the old Genre entry was replaced wholesale
+	MJ_CHECK(s.Find("town")->mode == Mode::Artist);
+
+	// everything not listed is byte-for-byte what it was
+	std::size_t listed = 0, untouched = 0;
+	for (const auto& [id, e] : s.environments) {
+		const bool isListed = std::find(AuthorIds().begin(), AuthorIds().end(), id) != AuthorIds().end();
+		if (isListed) { ++listed; continue; }
+		const auto it = before.find(id);
+		MJ_CHECK_MSG(it != before.end(), id);
+		if (it == before.end()) continue;
+		MJ_CHECK_MSG(e.mode == it->second.mode && e.selector == it->second.selector && e.allowStreaming == it->second.allowStreaming, id);
+		++untouched;
+	}
+	MJ_CHECK(listed == 16);
+	MJ_CHECK(untouched == 3);  // tavern_x, explore.tundra, special
+	MJ_CHECK(s.global.serverUrl == "http://h:1" && s.global.personalKey == "k");
+	MJ_CHECK(!s.Find("explore.tundra")->allowStreaming);  // streaming is on for the listed ones only
 }
 
-MJ_TEST(Presets_SurviveSanitize)
+MJ_TEST(Preset_SurvivesSanitizeIniAndProfileBuilder_IncludingUtf8)
 {
-	// The store sanitizes every Update: a preset must not be mangled or dropped by it.
 	auto s = mj::config::DefaultSettings();
-	ApplyPreset(s, "folk_journey");
+	s.global.serverUrl = "http://h:1";
+	s.global.personalKey = "k";
+	ApplyPreset(s, "author");
+	const std::string benoit = std::string("Beno\xC3\xAE") + "t Pioulard";
+	MJ_CHECK(s.Find("explore.marsh")->selector == benoit);
+
 	mj::config::Diagnostics diag;
 	mj::config::Sanitize(s, diag);
-	MJ_CHECK(s.Find("explore") && s.Find("explore")->selector == "Folk");
-	MJ_CHECK(s.Find("dungeon") && s.Find("dungeon")->selector == "Symphony");
+	MJ_CHECK_MSG(diag.empty(), diag.empty() ? "" : diag[0]);
+	for (const auto& id : AuthorIds()) MJ_CHECK_MSG(s.Find(id) != nullptr, id);
+	MJ_CHECK(s.Find("explore.marsh")->selector == benoit);
+
+	// INI round trip keeps the UTF-8 bytes and every field
+	mj::config::Diagnostics diag2;
+	const auto back = mj::config::ParseIni(mj::config::SerializeIni(s), diag2);
+	for (const auto& id : AuthorIds()) {
+		const auto* a = s.Find(id);
+		const auto* b = back.Find(id);
+		MJ_CHECK_MSG(a && b, id);
+		if (!a || !b) continue;
+		MJ_CHECK_MSG(a->mode == b->mode && a->selector == b->selector && a->service == b->service && a->id == b->id &&
+					 a->allowStreaming == b->allowStreaming, id);
+	}
+	MJ_CHECK(back.Find("explore.marsh")->selector == benoit);
+
+	// Harmony profile: all sixteen published, no error
+	const auto build = mj::config::BuildProfile(back);
+	for (const auto& pr : build.problems) {
+		MJ_CHECK_MSG(pr.severity != mj::config::ProblemSeverity::Error, pr.environment + ": " + pr.message);
+	}
+	MJ_CHECK(build.publishedTypes.size() == 16);
+	MJ_CHECK(build.json.find("Beno") == std::string::npos);  // artists are published by service+id, never by name
+	MJ_CHECK(build.json.find("UCDfF-6JZ4eOz8HyjQMjW8IA") != std::string::npos);
 }
 
 // ---- first run / status text -------------------------------------------------------------------------------
@@ -473,33 +545,6 @@ MJ_TEST(Edit_PoolSizeOnFreshSetupPersistsAndIsInherited)
 	MJ_CHECK(back.Find("combat") && back.Find("combat")->poolSize == 5);
 	// The stub entry is Vanilla: nothing changes for the profile.
 	MJ_CHECK(s.Find("explore")->mode == Mode::Vanilla);
-}
-
-MJ_TEST(Presets_MissingGenresOnlyForLibraryPresets)
-{
-	const auto* p = FindPreset("folk_journey");
-	MJ_CHECK(p != nullptr && !PresetUsesStreaming(*p));
-	MJ_CHECK(MissingPresetGenres(*p, {}).empty());  // no list known: nothing reported
-	std::vector<MJ::App::SearchHit> genres = { Hit("genre", "local", "folk", "Folk") };
-	const auto missing = MissingPresetGenres(*p, genres);
-	MJ_CHECK(missing.size() == 1 && missing[0] == "Symphony");  // case-insensitive match; listed once
-	genres.push_back(Hit("genre", "local", "Symphony", "Symphony"));
-	MJ_CHECK(MissingPresetGenres(*p, genres).empty());
-	const auto* e = FindPreset("calm_epic");
-	MJ_CHECK(e != nullptr && PresetUsesStreaming(*e));
-	MJ_CHECK(MissingPresetGenres(*e, genres).empty());  // streaming preset: not validated against the library
-}
-
-MJ_TEST(Presets_StreamingOnlyWhereAStreamingPresetFills)
-{
-	auto s = mj::config::DefaultSettings();
-	ApplyPreset(s, "folk_journey");
-	for (const auto& [id, en] : s.environments) MJ_CHECK_MSG(!en.allowStreaming, id);  // library preset enables nothing
-	ApplyPreset(s, "dark_depths");
-	MJ_CHECK(s.Find("dungeon")->allowStreaming && s.Find("dungeon")->mode == Mode::Query);
-	MJ_CHECK(!s.Find("explore")->allowStreaming);
-	ApplyPreset(s, "folk_journey");  // refilling dungeon from the library switches its streaming back off
-	MJ_CHECK(!s.Find("dungeon")->allowStreaming);
 }
 
 MJ_TEST(Hits_SuggestionsAreCapped)
@@ -596,7 +641,7 @@ MJ_TEST(StoreFlow_EditSaveApply)
 		s.global.personalKey = secret;
 	});
 	q.Request();
-	store.Update([&](mj::config::Settings& s) { ApplyPreset(s, "calm_epic"); });
+	store.Update([&](mj::config::Settings& s) { ApplyPreset(s, "author"); });
 	q.Request();
 	q.WaitIdle();
 
@@ -606,7 +651,7 @@ MJ_TEST(StoreFlow_EditSaveApply)
 	mj::config::SettingsStore reloaded(ini, dir.Path() / "cache");
 	MJ_CHECK(reloaded.Load());
 	const auto snap = reloaded.Snapshot();
-	MJ_CHECK(snap->Find("explore") && snap->Find("explore")->selector == "ambient");
+	MJ_CHECK(snap->Find("explore") && snap->Find("explore")->selector == "Hawktail");
 	MJ_CHECK(snap->global.serverUrl == "http://127.0.0.1:8080");
 	MJ_CHECK(snap->global.personalKey == secret);
 	MJ_CHECK(q.LastError().find(secret) == std::string::npos);

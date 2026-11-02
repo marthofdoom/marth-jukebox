@@ -417,59 +417,33 @@ namespace MJ::Menu
 
 	const std::vector<Preset>& Presets()
 	{
-		// Designed for the streaming case (marth 2026-10-27: his library is small): the streaming presets use a genre and
-		// queries that returned YouTube Music tracks through Harmony ('ambient', 'epic battle music orchestral'). They say
-		// so in the label, and they alone turn AllowStreaming on, only for the environments they fill (applying one is the
-		// user's explicit consent). "Folk journey" stays on the library ('Folk' exists there) and enables nothing.
+		// marth's own setup (2026-10-30). Non-ASCII text is written as UTF-8 byte escapes so it does not depend on the
+		// compiler's source character set ("Benoit" with the i-circumflex U+00EE = C3 AE).
 		static const std::vector<Preset> kPresets = {
-			{ "calm_epic", "Calm exploration + epic combat (YouTube Music)",
-			  "Ambient music while travelling, epic orchestral battle music in fights and boss battles. "
-			  "Turns on streaming (YouTube Music) for those environments.",
-			  { { "explore", Mode::Genre, "ambient", true },
-				{ "combat", Mode::Query, "epic battle music orchestral", true },
-				{ "boss", Mode::Query, "epic battle music orchestral", true } } },
-			{ "dark_depths", "Dark dungeons (YouTube Music)",
-			  "Dark ambient music in dungeons. Turns on streaming (YouTube Music) for dungeons.",
-			  { { "dungeon", Mode::Query, "dark ambient dungeon synth", true } } },
-			{ "folk_journey", "Folk journey (library only)",
-			  "Folk music on the road and in towns, symphonic music underground, all from your own library. No streaming.",
-			  { { "explore", Mode::Genre, "Folk" },
-				{ "town", Mode::Genre, "Folk" },
-				{ "dungeon", Mode::Genre, "Symphony" } } },
-			{ "vanilla", "Back to vanilla",
-			  "Every environment returns to the original Skyrim music.",
-			  {} },
+			{ "author", "Author's Recommendation (YouTube Music)",
+			  "Streams from YouTube Music: turns streaming ON for the 16 environments it fills (bosses, combat, dungeons, "
+			  "exploration regions, towns) and sets their music to the author's artists and playlist. Needs a Harmony server "
+			  "with YouTube Music. Other environments are left as they are; you can change anything afterwards.",
+			  {
+				{ "boss", Mode::Query, "epic battle music orchestral", "", "" },
+				{ "combat", Mode::Artist, "Michael Ghelfi", "ytmusic", "UCek0QuSdJ9sW6-L3K0VmnPw" },
+				{ "combat.civil_war", Mode::Artist, "Adrian von Ziegler", "ytmusic", "UCJU_n-HbwmQntgeMeIe3nXg" },
+				{ "dungeon", Mode::Artist, "Atrium Carceri", "ytmusic", "UCGyKzvCBAw1m04s7VIG5w2g" },
+				{ "dungeon.fort", Mode::Artist, "Old Tower", "ytmusic", "UC4ik8p6RUYzvFskVU4TADsw" },
+				{ "dungeon.ice", Mode::Artist, "Stephan Micus", "ytmusic", "UCprn6h7zUdy_oO4_iG4vUCQ" },
+				{ "explore", Mode::Artist, "Hawktail", "ytmusic", "UCVCj1g2wXBVOXozmTnEG4FA" },
+				{ "explore.coast", Mode::Artist, "Cheryl E. Leonard", "ytmusic", "UCVaLftJFR7QWXLgevl-lQxA" },
+				{ "explore.forest_fall", Mode::Artist, "Tim Janis", "ytmusic", "UCnDvEXlB3dRT0W1jTdJf_Wg" },
+				{ "explore.forest_pine", Mode::Artist, "Deuter", "ytmusic", "UCmKx7PP_bBsNpNsHAhx_a3A" },
+				{ "explore.marsh", Mode::Artist, "Beno\xC3\xAE" "t Pioulard", "ytmusic", "UCDfF-6JZ4eOz8HyjQMjW8IA" },
+				{ "explore.mountain", Mode::Artist, "Kaki King", "ytmusic", "UCdtSCu86Vy66yeeA4TmB2AA" },
+				{ "explore.reach", Mode::Playlist, "Goat Rodeo Sessions", "ytmusic", "PL030536720850468C" },
+				{ "explore.snow", Mode::Artist, "Henning Schmiedt", "ytmusic", "UC_g4ULXwWKixpmEWWqof5dQ" },
+				{ "town", Mode::Artist, "Per-Olov Kindgren", "ytmusic", "UCL5frAZoI4rtafCi2BqPDAw" },
+				{ "town.castle", Mode::Artist, "Fief", "ytmusic", "UCcY_pc8WPZ58k33Cp3ye70A" },
+			  } },
 		};
 		return kPresets;
-	}
-
-	bool PresetUsesStreaming(const Preset& a_preset)
-	{
-		return std::any_of(a_preset.entries.begin(), a_preset.entries.end(), [](const PresetEntry& e) { return e.streaming; });
-	}
-
-	std::vector<std::string> MissingPresetGenres(const Preset& a_preset, const std::vector<App::SearchHit>& a_genres)
-	{
-		std::vector<std::string> missing;
-		if (a_genres.empty()) {
-			return missing;  // no list to compare against: say nothing
-		}
-		for (const auto& entry : a_preset.entries) {
-			if (entry.mode != Mode::Genre || entry.streaming) {
-				continue;
-			}
-			bool found = false;
-			for (const auto& g : a_genres) {
-				if (g.kind == "genre" && (mj::categories::EqualsNoCase(g.id, entry.selector) || mj::categories::EqualsNoCase(g.title, entry.selector))) {
-					found = true;
-					break;
-				}
-			}
-			if (!found && std::find(missing.begin(), missing.end(), entry.selector) == missing.end()) {
-				missing.emplace_back(entry.selector);
-			}
-		}
-		return missing;
 	}
 
 	const Preset* FindPreset(std::string_view a_id)
@@ -488,32 +462,16 @@ namespace MJ::Menu
 		if (!preset) {
 			return false;
 		}
-		if (a_presetId == "vanilla") {
-			std::vector<std::string> ids;
-			for (const auto& [id, e] : a_settings.environments) {
-				ids.push_back(id);
-			}
-			for (const auto& id : ids) {
-				ResetToVanilla(a_settings, id);
-			}
-			return true;
-		}
 		for (const auto& entry : preset->entries) {
-			const std::string id = entry.envId;
-			// Sub-environment overrides of this group would beat the group's new selection: drop them.
-			const std::string prefix = id + ".";
-			for (auto it = a_settings.environments.begin(); it != a_settings.environments.end();) {
-				if (it->first.rfind(prefix, 0) == 0) {
-					it = a_settings.environments.erase(it);
-				} else {
-					++it;
-				}
-			}
-			auto& e = EnsureEntry(a_settings, id);
-			e.mode = entry.mode;
-			ClearSelection(e);
-			e.selector = entry.selector;
-			e.allowStreaming = entry.streaming;  // true only for the environments a streaming preset fills
+			// Replace the whole entry (no inherited leftovers); unlisted sub-environments are not touched.
+			EnvSetting fresh;
+			fresh.poolSize = CurrentPoolSize(a_settings);
+			fresh.mode = entry.mode;
+			fresh.selector = entry.selector;
+			fresh.service = entry.service;
+			fresh.id = entry.id;
+			fresh.allowStreaming = true;  // the click is the user's consent
+			a_settings.environments[entry.envId] = std::move(fresh);
 		}
 		return true;
 	}

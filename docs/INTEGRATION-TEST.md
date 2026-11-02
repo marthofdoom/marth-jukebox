@@ -41,7 +41,7 @@ Covers docs/ROADMAP-1.0.md acceptance items 3-7 for the playback core (the menu 
 ## 2. Configure (menu or INI) (acceptance 3)
 1. Set ServerUrl + PersonalKey, and: `explore` = Genre (a genre the library really has; the picker lists them),
    `combat` = Query `epic battle music orchestral` with streaming ON, `dungeon` = Artist from the library.
-   Note: the presets and these examples assume YouTube Music streaming for most environments (a small library
+   Note: the preset (Author's Recommendation, YouTube Music) and these examples assume YouTube Music streaming for most environments (a small library
    cannot fill them); a library-only selection with few tracks shows "Small selection: tracks will repeat".
    PoolSize 3. Apply (menu) or restart (INI).
 2. Expect: `[net] Connected. Sources: ...`, `[profile] published 3 environment type(s)`, `[plan] #n: engine writes on;
